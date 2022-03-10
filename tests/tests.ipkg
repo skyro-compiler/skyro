@@ -1,0 +1,6 @@
+package runtests
+
+depends = contrib, test
+main = Main
+
+executable = runtests -- the name of the executable that is created in `./build/exec`

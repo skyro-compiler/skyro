@@ -1,0 +1,26 @@
+package cairolib
+
+-- `sourcedir`
+-- The `./HelloIdris2` dir is in the root of the repo, so this is `"./"`
+-- If you were to move that to `"./src/` then you'd update this field
+sourcedir = "./"
+
+-- `depends`
+-- This is a comma separated list of deps, eg: `depends = base, contrib`
+depends = base
+
+-- `modules`
+-- This is a comma separated list of the modules you'll want to export
+-- to the final artifact
+modules =
+    Cairo.Output,
+    Cairo,
+    Starknet.Syscall,
+    Starknet,
+    Common.Casts,
+    Common.Dict,
+    Common.ECDSA,
+    Common.Felt,
+    Common.Memory,
+    Common.Pedersen,
+    Common
