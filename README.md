@@ -1,7 +1,7 @@
-# Skyro
+# Skyro 🦜
 Welcome to the home of the Skyro compiler!
 
-Skyro compiles programs written in [Idris2](https://github.com/idris-lang/Idris2) to [Cairo](https://www.cairo-lang.org/) and thereby enables high-level, pure functional programming for [verifiable computation](https://en.wikipedia.org/wiki/Verifiable_computing). 
+Skyro compiles programs written in [Idris2](https://github.com/idris-lang/Idris2) to [Cairo](https://www.cairo-lang.org/) and thereby enables high-level, pure functional programming for [verifiable computation](https://en.wikipedia.org/wiki/Verifiable_computing). Skyro also supports [StarkNet](https://starknet.io/) contract programming ([see below](#starknet)).
 
 We strongly believe that Cairo as a technology could have a big impact on society (trust in math, not companies and not governments) and we think that typed, pure functional programming is currently the best way to write programs in general.
 
@@ -93,25 +93,59 @@ Implicits are tracked and injected automatically, no need for manual handling of
 ### Foreign Function Interface (FFI)
 FFI is the mechanism to call functions written in Cairo from Idris2. See [test011/Main.idr](tests/idrisToCairo/examples/test011/Main.idr) as an example.
 
-## Starknet Support
-Support for Starknet contract programming is under way. But it will take some time since many details need to be worked out.
-Currently, as an [example](example-starknet/), we have a very simple hand-written Wrapper contract which calls a library contract written in Idris2. 
-Just run the co-located [run.sh](example-cairo/run.sh) script.
+## StarkNet
+StarkNet contract programming is now supported!
+Here is an example:
+
+```haskell
+module Main
+import Starknet
+%language ElabReflection
+
+-- Event with zero additional keys and two values of type Felt.
+balanceChanged : EventDesc [] [Felt, Felt]
+
+-- Storage variable with one key of type Felt storing a value of type Felt.
+balance : StorageSpace [Felt] Felt
+
+-- View function
+getBalance : View m => (addr: Felt) ->  m Felt
+getBalance addr = readStorageVar (balance `at` addr)
+
+-- External function
+changeBalance : External m => (difference: Felt) -> m Unit
+changeBalance difference = do 
+  callerAddr <- getCallerAddress
+  bal <- getBalance callerAddr
+  let newBal = bal + difference
+  writeStorageVar (balance `at` callerAddr) newBal
+  emitEvent ((balanceChanged `applyValue` callerAddr) `applyValue` newBal)
+
+main = abi 
+  {functions   = ["getBalance", "changeBalance"]} 
+  {storageVars = ["balance"]} 
+  {events      = ["balanceChanged"]}
+```
+
+The above example can be found in [example-starknet/Example.idr](example-starknet/Example.idr). Just run the co-located [run.sh](example-starknet/run.sh) script. It compiles `Example.idr` to the corresponding `Example.cairo` contract and runs [example-starknet/contract_test.py](example-starknet/contract_test.py) locally. (The `run.sh` script requires a [native platform build](#native-platform-build) of the compiler in this repository.)
 ```
 > ./run.sh
-Deploy transaction was sent. Contract address: 0x069cd3067f70b2c1541048e30604aad827e3614fd70cd8ceae81ce4a7d06e6ff Transaction hash: 0x2cd53a86449524d6d367ee3197ff6ccaaf7495cb02d76fa2022f57b340ddf9e
-Invoke transaction was sent. Contract address: 0x069cd3067f70b2c1541048e30604aad827e3614fd70cd8ceae81ce4a7d06e6ff Transaction hash: 0x6a512ba3b509f0a75caec4717bf792cd185693aadeed5fd576f7e9d91395a5b
-{
-    "tx_status": "RECEIVED"
-}
-Contract successfully deployed. Observe the emitted event once the transaction is processed:
-https://goerli.voyager.online/tx/0x6a512ba3b509f0a75caec4717bf792cd185693aadeed5fd576f7e9d91395a5b#events
+============================= test session starts ==============================
+collected 1 item
+
+contract_test.py .                                                       [100%]
 ```
-Be aware that this is a hand-crafted example which circumvents many limitations.
+
+### Features:
+- Support for `Constructor`, `L1Handler`, `External` and `View` functions. `External` functions are allowed to call `View` functions, but not vice versa. This is ensured by the typesystem.
+- Most `syscall` operations are [available](cairolib/Starknet/Types.idr).
+- Support for events with multiple keys and multiple values.
+- Support for storage variables.
+- Expressive datatypes (records and variants) are supported in the interface (parameter and return types of functions, keys and values of events and storage variables).
+
 
 ## What's missing / limitations
 - Primitive types and operations:
-  - BigInteger support is under way - this means that programs using `Nat` and `Integer` in Idris2 will not compile until this is implemented. For example `length` on `List` and `shiftL` on some primitives types do currently not work because of that.
   - `String` and `Char` are not yet supported. 
   - Patternmatching on `Felt` emits a warning and does not work.
   - `Felt` is a field element and by definition has no defined `Ord`ering.
@@ -119,11 +153,16 @@ Be aware that this is a hand-crafted example which circumvents many limitations.
 - Standard library:
   - Currently we expose the whole Idris2 prelude (except `IO`), this needs to be refined.
   - Most cairo specific functionality is currently offered in a primitive form although Idris2 would allow the definition of very elegant and typesafe abstractions and APIs. These need to be worked out.
-- Starknet:
-  - Most Starknet specific functionality is currently not supported and requires a significant effort to be worked out.
-  - Operations on primitive types (e.g. `Int32`) use hints in their implementation but are not whitelisted. They won't work on Starknet.
-- Much more tests are needed: Currently there are mainly small program examples in the [tests](/tests/) directory.
-
+- StarkNet:
+  - Cross contract / library calls are possible using raw syscall functions. A much more convenient and typesafe interface mechanism should be provided.
+  - Operations on numeric types other then `Felt` (e.g. `Int32`, `Integer`) use hints in their implementation but are not whitelisted. They won't work on StarkNet.
+  - The generated code uses `@raw_input`, `@raw_output`, therefore the generated ABI appears unstructured. This needs improvement.
+- Testing: 
+  - Currently there are mainly small program examples in the [tests](/tests/) directory.
+  - Much more automated testing is required!
+- Documentation:
+  - Skyro needs an onboarding tutorial.
+  - More documentation about the implementation is also required.
 
 ## Contribution
 If you find a problem we are happy if you would open an issue with a small example.
@@ -132,13 +171,13 @@ We are also happy to take pull requests!
 ## Questions and Answers
 
 #### Q: Why did you choose Idris2 and not for example Python?
-A: The target platform Cairo has a _write once memory_ (immutable memory) which is a great fit for purely functional languages (which we prefer anyways when it comes to programs which should be corret).
+A: The target platform Cairo has a _write once memory_ (immutable memory) which is a great fit for purely functional languages (which we prefer anyways when it comes to programs which should be correct).
 
 #### Q: Why did you choose Idris2 and not Haskell?
 A: There are mutliple reasons:
 - Idris2 uses by-value evaluation which is simpler to map to Cairo than Haskell's lazy evaluation.
 - Idris2 is designed for pluggable custom backend integration.
-- The Idris2 comiler is much smaller than GHC and thus simpler to understand and it takes less time to build it.
+- The Idris2 compiler is much smaller than GHC and thus simpler to understand and it takes less time to build it.
 - Idris2's quantitative type system [QTT](https://arxiv.org/abs/2104.00480) allows for safe and elegant APIs (see Dict as an example).
   
 #### Q: Are you willing to work for my crypto startup?
@@ -154,8 +193,10 @@ A: We are currently happy with our jobs at the university and we are always look
 │   └── Starknet               Starknet specific parts
 ├── example-cairo              Cairo example    
 ├── example-starknet           Starknet example
+├── skyro-runtime              Runtime library 
 ├── src                        Compiler source directory
-│   ├── CairoCode              Definition of the intetmediate representation (IR)
+│   ├── ABI                    Definition of the application binary interface
+│   ├── CairoCode              Definition of the intermediate representation (IR)
 │   ├── CodeGen                Code generator (turning IR to Cairo source code)
 │   ├── Optimisation           Optimization passes
 │   ├── Primitives             Support for primitive types
@@ -180,11 +221,11 @@ If you just want to use the compiler, we recommend to follow [these instructions
 Follow the instructions [here](https://cairo-lang.org/docs/quickstart.html).
 
 ### Checkout and build the Idris2 compiler
-Tested with version 9a9412e1a2ac555f05edb7c33036e91ff3c60555
+Tested with version 9e92e7ded05741aa7d030f815c0441867b77ad0b
 ```
 > git clone https://github.com/idris-lang/Idris2.git
 > cd Idris2
-> git checkout 9a9412e1a2ac555f05edb7c33036e91ff3c60555
+> git checkout 9e92e7ded05741aa7d030f815c0441867b77ad0b
 > make bootstrap SCHEME=chez
 > make install && make clean
 > make all && make install && make install-api
@@ -209,12 +250,18 @@ Argument description:
  - `Example.idr` the Idris2 program to compile
  - `-o Example.cairo` the resulting Cairo program (default location ./build/exec/Exanple.cairo)
 
+To compile a StarkNet contract, add `--directive starknet`.
 
 Compile Cairo to AIR and execute AIR:
+
 ```
-> cairo-compile ./build/exec/Example.cairo --output ./build/exec/Example_compile.json && 
+> export SKYRORUNTIME="../skyro-runtime" 
+> export PYTHONPATH="${PYTHONPATH}:${SKYRORUNTIME}"
+> cairo-compile --cairo_path ${SKYRORUNTIME} ./build/exec/Example.cairo --output ./build/exec/Example_compile.json && 
   cairo-run --program=./build/exec/Example_compile.json --print_output --print_info --layout=small
 ```
+
+`SKYRORUNTIME` must point to the [skyro-runtime/](skyro-rumtime/) directory. This ensures that `cairo-compile` finds required dependencies on its `--cairo_path`. `PYTHONPATH` must be extended because `cairo-run` potentially runs hints which import python helpers from the skyro-runtime.  
 
 Format the cairo code (not required):
 ```
@@ -256,7 +303,7 @@ docker run --rm -it -v %cd%/docker-compile:/app/docker-compile skyro idrisToCair
 ### Build the docker image
 The following command create a docker image containing all prerequisits for building the compiler:
 ```
-> docker build --target environment --platform linux/amd64 . -t skyro-env
+> docker build --target environment --platform linux/amd64 . -t skyro
 ```
 
 - `--target environment` only builds the `environment` stage
@@ -267,11 +314,11 @@ The following commands map the root directory of this projet into docker and sta
 
 Linux / macOS:
 ```
-> docker run --platform linux/amd64 -v $(pwd):/app/ skyro-env /app/docker-bin/skyro-build.sh 
+> docker run --platform linux/amd64 -v $(pwd):/app/ skyro /app/docker-bin/skyro-build.sh 
 ```
 Windows:
 ```
-> docker run -v %cd%:/app/ skyro-env /app/docker-bin/skyro-build.sh
+> docker run -v %cd%:/app/ skyro /app/docker-bin/skyro-build.sh
 ```
 
 ### Run tests
@@ -281,7 +328,7 @@ Linux / macOS:
 ```
 Windows:
 ```
-> docker run -v %cd%:/app/ skyro-env /app/docker-bin/skyro-test.sh
+> docker run -v %cd%:/app/ skyro /app/docker-bin/skyro-test.sh
 ```
 
 ### Clean build artifacts
@@ -291,21 +338,28 @@ Linux / macOS:
 ```
 Windows:
 ```
-> docker run -v %cd%:/app/ skyro-env /app/docker-bin/skyro-clean.sh
+> docker run -v %cd%:/app/ skyro /app/docker-bin/skyro-clean.sh
 ```
 
 # Credits
 Skyro is developed at the [University of Applied Sciences and Arts Northwestern Switzerland (FHNW)](https://www.fhnw.ch/en/about-fhnw/schools/school-of-engineering/institutes/institute-of-mobile-and-distributed-systems) 
 
-![FHNW logo](https://www.fhnw.ch/en/++theme++web16theme/assets/media/img/university-applied-sciences-arts-northwestern-switzerland-fhnw-logo.svg)
+
+
+<img src="https://www.fhnw.ch/en/++theme++web16theme/assets/media/img/university-applied-sciences-arts-northwestern-switzerland-fhnw-logo.svg" alt="FHNW logo" height="50"/>
+
+<br>
 
 This project is sponsored by [StarkWare](https://starkware.co/):
 
-![StarkWare logo](https://starkware.co/wp-content/uploads/2021/04/logotype.svg)
+<img src="https://starkware.co/wp-content/uploads/2021/04/logotype.svg" alt="StarkWare logo" height="50"/>
+
+<br>
 
 and the Switzerland based [Hasler Foundation](https://haslerstiftung.ch/en/the-hasler-foundation/): 
 
-![Hasler logo](https://haslerstiftung.ch/wp-content/uploads/2018/07/cropped-Hasler_Logo_Horizontal.png)
+<img src="https://haslerstiftung.ch/wp-content/uploads/2018/07/cropped-Hasler_Logo_Horizontal.png" alt="Hasler logo" height="40"/>
+
 
 Thank you both for your generous support in this project!
 

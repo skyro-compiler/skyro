@@ -10,3 +10,6 @@ example-starknet/Contract_abi.json
 example-starknet/Contract_compiled.json
 example-starknet/ExampleLib.cairo
 
+.idea/
+.vscode/
+

@@ -1,0 +1,2 @@
+../../../starknet-compile.sh Main
+pytest -p no:warnings --no-header --no-summary contract_test.py | head -n 4

@@ -87,3 +87,17 @@ public export %inline
 Cast Bool Felt where
   cast True = 1
   cast False = 0
+
+
+export
+%foreign 
+    "imports:starkware.cairo.common.math_cmp is_le_felt"
+    "linear_implicits:range_check_ptr"
+    """
+    code:
+    func Common_Felt_is_le_felt(range_check_ptr, a, b) -> (res, range_check_ptr):
+       let (res) = is_le_felt{range_check_ptr = range_check_ptr}(a,b)
+       return (res, range_check_ptr)
+    end
+    """
+is_le_felt : (a: Felt) -> (b: Felt) -> Bool

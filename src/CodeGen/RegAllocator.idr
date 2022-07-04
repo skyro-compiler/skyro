@@ -1,4 +1,4 @@
-module CodeGen.RegAlloc
+module CodeGen.RegAllocator
 
 import CommonDef
 import Core.Name.Namespace
@@ -138,7 +138,7 @@ collectCairoInstRegUseBefore path apRegion apMap (ASSIGN _ from) = addRegUse (re
 collectCairoInstRegUseBefore path apRegion apMap (MKCON _ _ args) = addRegUses (reverse path) apRegion args apMap
 collectCairoInstRegUseBefore path apRegion apMap (MKCLOSURE _ _ _ args) = addRegUses (reverse path) apRegion args apMap
 collectCairoInstRegUseBefore path apRegion apMap (APPLY _ impls clo arg) = addRegUses (reverse path) apRegion (clo::arg::(map fst (values impls))) apMap
-collectCairoInstRegUseBefore path apRegion apMap (MKCONSTANT _ _ ) =  apMap
+collectCairoInstRegUseBefore path apRegion apMap (MKCONSTANT _ _ ) = apMap
 collectCairoInstRegUseBefore path apRegion apMap (CALL _ impls _ args) = addRegUses (reverse path) apRegion (args ++ (map fst (values impls))) apMap
 collectCairoInstRegUseBefore path apRegion apMap (OP _ impls _ args) = addRegUses (reverse path) apRegion (args ++ (map fst (values impls))) apMap
 collectCairoInstRegUseBefore path apRegion apMap (EXTPRIM _ impls _ args) = addRegUses (reverse path) apRegion (args ++ (map fst (values impls))) apMap
@@ -146,6 +146,7 @@ collectCairoInstRegUseBefore path apRegion apMap (CASE from _ _) = addRegUse (re
 collectCairoInstRegUseBefore path apRegion apMap (CONSTCASE from _ _) = addRegUse (reverse path) apRegion from apMap
 collectCairoInstRegUseBefore path apRegion apMap (RETURN froms impls) = addRegUses (reverse path) apRegion (froms ++ (values impls)) apMap
 collectCairoInstRegUseBefore path apRegion apMap (PROJECT _ from _) = addRegUse (reverse path) apRegion from apMap
+collectCairoInstRegUseBefore path apRegion apMap (STARKNETINTRINSIC _ impls _ args) = addRegUses (reverse path) apRegion (args ++ (map fst (values impls))) apMap
 collectCairoInstRegUseBefore path apRegion apMap (NULL _) = apMap
 collectCairoInstRegUseBefore path apRegion apMap (ERROR _ _) = apMap
 
@@ -158,6 +159,7 @@ collectCairoInstRegUseAfter path apRegion apMap (MKCONSTANT to c ) = addResRegDe
 collectCairoInstRegUseAfter path apRegion apMap (CALL tos impls _ _) = addResRegDefs (reverse path) apRegion (tos ++ (map snd (values impls))) apMap
 collectCairoInstRegUseAfter path apRegion apMap (OP to impls _ _) = addResRegDefs (reverse path) apRegion (to::(map snd (values impls))) apMap
 collectCairoInstRegUseAfter path apRegion apMap (EXTPRIM tos impls _ _) = addResRegDefs (reverse path) apRegion (tos ++ (map snd (values impls))) apMap
+collectCairoInstRegUseAfter path apRegion apMap (STARKNETINTRINSIC to impls _ _) = addResRegDefs (reverse path) apRegion (to::(map snd (values impls))) apMap
 collectCairoInstRegUseAfter path apRegion apMap (CASE _ _ _) = apMap
 collectCairoInstRegUseAfter path apRegion apMap (CONSTCASE _ _ _) = apMap
 collectCairoInstRegUseAfter path apRegion apMap (RETURN _ _) = apMap
@@ -165,10 +167,16 @@ collectCairoInstRegUseAfter path apRegion apMap (PROJECT to _ _) = addResRegDef 
 collectCairoInstRegUseAfter path apRegion apMap (NULL to) = addResRegDef (reverse path) apRegion Nothing to apMap
 collectCairoInstRegUseAfter path apRegion apMap (ERROR to _) = addResRegDef (reverse path) apRegion Nothing to apMap
 
+intrinsicApStable : StarkNetIntrinsic -> Bool
+-- Todo: Check that Cairo really produce ap stable
+intrinsicApStable (StorageVarAddr _) = True
+intrinsicApStable (EventSelector _) = True
+
 isCairoInstApModStatic : SortedSet Name -> CairoInst -> Bool
 isCairoInstApModStatic _ (APPLY _ _ _ _) = False -- An apply can result in an arbitrary ap mod, so this is undef
 isCairoInstApModStatic safeCalls (CALL _ _ n _) = contains n safeCalls
 isCairoInstApModStatic _ (EXTPRIM _ _ name _) = externalApStable name
+isCairoInstApModStatic _ (STARKNETINTRINSIC _ _ i _) = intrinsicApStable i
 isCairoInstApModStatic _ (OP _ _ fn _) = primFnApStable fn
 isCairoInstApModStatic _ (CASE _ _ _) = False
 isCairoInstApModStatic _ (CONSTCASE _ _ _) = False
@@ -300,6 +308,7 @@ assignRegs state depth regs = foldl assignReg state regs
      assignReg state assig@(MkRegInfo locs r (Unassigned _ _ _)) = doRegAlloc (detectApRegion locs) state assig
      assignReg (mapping, counters) (MkRegInfo _ r res) = (insert r res mapping, counters) --Already ia allocated skip
 
+
 mutual
     assignBlockRegs : SelectionState -> RegTreeBlock -> SelectionState
     assignBlockRegs state block = assignNestedRegs
@@ -325,9 +334,8 @@ mutual
          mergeResults : List SelectionState -> SelectionState
          mergeResults branchResults = foldl mergeStates (fst assignCaseLocatedRegs, (0,0)) branchResults
 
-public export
-allocateCairoDefRegisters : SortedSet Name -> (Name, CairoDef) -> (CairoDef, SortedSet Name)
-allocateCairoDefRegisters safeCalls def@(n, FunDef args implicits rets body) = (updatedDef, updatedSafeCalls)
+allocateRegisters : SortedSet Name -> (Name, CairoDef) -> List CairoReg -> List CairoInst -> (CairoDef, SortedSet Name)
+allocateRegisters safeCalls def@(n, _) args body= (updatedDef, updatedSafeCalls)
     where collectedRegs : (SortedMap CairoReg RegInfo, Bool)
           collectedRegs = collectRegUse safeCalls args body
           builtTree : RegTreeBlock
@@ -338,6 +346,11 @@ allocateCairoDefRegisters safeCalls def@(n, FunDef args implicits rets body) = (
           updatedDef = snd $ substituteDefRegisters (\reg => lookup reg (fst assignedRegs)) def
           updatedSafeCalls : SortedSet Name
           updatedSafeCalls = if (snd collectedRegs) then (insert n safeCalls) else safeCalls
+
+public export
+allocateCairoDefRegisters : SortedSet Name -> (Name, CairoDef) -> (CairoDef, SortedSet Name)
+allocateCairoDefRegisters safeCalls def@(n, FunDef args _ _ body) = allocateRegisters safeCalls def args body
+allocateCairoDefRegisters safeCalls def@(n, ExtFunDef _ args _ _ body) = allocateRegisters safeCalls def args body
 allocateCairoDefRegisters safeCalls def@(n, ForeignDef info _ _) = if isApStable info
     then (snd def, insert n safeCalls)
     else (snd def, safeCalls)

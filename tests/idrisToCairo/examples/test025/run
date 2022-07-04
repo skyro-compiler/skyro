@@ -1,0 +1,3 @@
+echo "Tests compilation only!"
+
+../../../starknet-compile.sh Main

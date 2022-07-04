@@ -12,7 +12,9 @@ import CairoCode.Traversal.Base
 import CairoCode.Traversal.Composition
 import Utils.Lens
 import CairoCode.Traversal.ValueTracker
+import Utils.Helpers
 import Debug.Trace
+import Optimisation.DataFlowAnalyser
 
 %hide Prelude.toList
 
@@ -39,6 +41,12 @@ data UntupleInfo : Type where
  Undecided : UntupleInfo                                -- It is not known yet if this can be untupled or not
  Candidate : Int -> List UntupleInfo -> UntupleInfo     -- It is a Candidate for being untupled nothing speaks against it for now
  Untouched : UntupleInfo                                -- This can or should not be Untupled, either something prevents or we are not sure (recursion)
+
+Show UntupleInfo where
+    show Undecided = "Undecided"
+    show Untouched = "Untouched"
+    show (Candidate n args) = assert_total $ "Candidate("++(show n)++"|"++(separate "," (map show args))++")"
+
 
 toUntupleInfo : TupleStructure -> UntupleInfo
 toUntupleInfo (Tupled t fields) = Candidate t (map toUntupleInfo fields)
@@ -68,13 +76,19 @@ mergeUntupleInfo (Candidate t1 fs1) (Candidate t2 fs2) = if t1 /= t2 || (length 
 Semigroup UntupleInfo where (<+>) = mergeUntupleInfo
 Monoid UntupleInfo where neutral = Undecided
 
--- Assign is deliberately not tracked as then all untupled args need to be assigned (making matter worse than better)
+-- Todo: Can we use the global tracking Infrastructure to do this better?
+--       Or Alternatively we could build this on the Dataflow Analysis (but that one is overly conservative)
+--          However because of that it is less likely to do unecessary unpacking and repackings
+
 extractUntupleInfoDef : SortedMap Name UntupleInfo -> (Name, CairoDef) -> Maybe UntupleInfo
 -- Ignore already untupled
-extractUntupleInfoDef resolved def@(_, FunDef _ _ [_] _) = snd (runVisitConcatCairoDef (traversal $ valueCollector idLens (dbgDef def) (passThroughImpls $ defaultNoImplValBind (\_ => Untouched) tupledReturnTracker) returnCollector) def)
+extractUntupleInfoDef resolved def@(_, FunDef _ _ [_] _) = snd (runVisitConcatCairoDef (traversal $ valueCollector idLens (dbgDef def) prepareB (passThroughImpls $ defaultNoImplValBind (\_ => Untouched) tupledReturnTracker) returnCollector) def)
     where dbgDef : (Name, CairoDef) -> CairoReg -> UntupleInfo
           dbgDef (name, def) reg = trace "Register not bound in \{show name}: \{show reg}" Undecided
+          prepareB : CairoReg -> UntupleInfo -> UntupleInfo
+          prepareB _ ut = ut
           tupledReturnTracker : (v:InstVisit UntupleInfo) -> Traversal (ScopedBindings UntupleInfo) (Maybe (NoImplValBindType v UntupleInfo))
+          tupledReturnTracker (VisitAssign _ a) = pure $ Just $ a
           tupledReturnTracker (VisitMkCon _ tag args) = pure $ Just $ Candidate (fromMaybe 0 tag) args
           tupledReturnTracker (VisitCall [r] _ name _ ) = pure $ Just [fromMaybe Undecided (lookup name resolved)]
           tupledReturnTracker (VisitExtprim [r] _ name _ ) = pure $ Just [fromMaybe Undecided (lookup name resolved)]
@@ -130,6 +144,49 @@ iterFindTuplingTargetDefs info defs = if fst singleRun
     where singleRun : (Bool, SortedMap Name UntupleInfo)
           singleRun = runFindTuplingTargetDefs info defs
 
+-- Here comes the test if the Callers profits from an untupled representation
+findUnprofitableUntuplingTargets : List (Name, CairoDef) -> SortedSet Name
+findUnprofitableUntuplingTargets defs = snd (runVisitConcatCairoDefs (traversal $ valueCollector idLens dbgDef prepareB (passThroughImpls $ defaultNoImplValBind (\_ => empty) tupledCallResultTracker) tupledUseFinder) defs)
+    where dbgDef : CairoReg -> SortedSet Name
+          dbgDef reg = trace "Register not bound" empty
+          prepareB : CairoReg -> SortedSet Name -> SortedSet Name
+          prepareB _ ns = ns
+          Semigroup (SortedSet Name) where (<+>) = union
+          Monoid (SortedSet Name) where neutral = empty
+          tupledCallResultTracker : (v:InstVisit (SortedSet Name)) -> Traversal (ScopedBindings (SortedSet Name)) (Maybe (NoImplValBindType v (SortedSet Name)))
+          -- We track through assigns
+          tupledCallResultTracker (VisitAssign _ a) = pure $ Just $ a
+          -- These are the sources
+          --  Note: Despite Extprim being a source we need to untuple it if possible as the target signature may dictate it
+          --        Same for ForeignFuns, however we filter them out later instead of here
+          tupledCallResultTracker (VisitCall [_] _ name _ ) = pure $ Just [singleton name]
+          -- tupledCallResultTracker (VisitExtprim [_] _ name _ ) = pure $ Just [singleton name]
+          -- If a composite escapes then the whole thing escapes (Note: when untupling is used after other optimized thte result of thesewill always escape)
+          --  However this way we have less order constraints
+          tupledCallResultTracker (VisitMkCon _ _ args) = pure $ Just $ foldl union empty args
+          tupledCallResultTracker (VisitMkClosure _ _ _ args) = pure $ Just $ foldl union empty args
+          -- No need to track the rest as these escape the name anyway and lead to an entry from the tupledUseFinder anyway
+          tupledCallResultTracker _ = pure $ Nothing
+          -- Helper as used ofthen
+          fuseAllTupled : SortedMap LinearImplicit ((SortedSet Name), CairoReg) -> List (SortedSet Name) -> SortedSet Name
+          fuseAllTupled impls args = foldl union empty (args ++ (map fst (values impls)))
+
+          tupledUseFinder : InstVisit (SortedSet Name) -> Traversal (ScopedBindings (SortedSet Name)) (SortedSet Name)
+          -- if used as an argument (or implicit) in a call or operation it is needed tupled
+          tupledUseFinder (VisitCall _ impls _ args) = pure $ fuseAllTupled impls args
+          tupledUseFinder (VisitExtprim _ impls _ args) = pure $ fuseAllTupled impls args
+          tupledUseFinder (VisitStarkNetIntrinsic _ impls _ args) = pure $ fuseAllTupled impls args
+          tupledUseFinder (VisitOp _ impls _ args) = pure $ fuseAllTupled impls args
+          tupledUseFinder (VisitApply _ impls f a) = pure $ fuseAllTupled impls [f, a]
+          -- if used for branching we need tupled (in theory we could rely on dataflow to eliminate if only tag is used and untupled would be kn)
+          --   Todo: if we have an example try to remove these and see how the result looks)
+          tupledUseFinder (VisitCase br) = pure $ br
+          -- The rest does not escape
+          --  Note we do not treat return as escape, otherwise untupling of nested call hierarchies would always be rejected
+          --  However the most essential here is that project does not escape
+          tupledUseFinder _ = pure $ empty
+
+
 -- Here is the Closure rewiring
 
 record TupGenRes where
@@ -159,15 +216,15 @@ deriveUntupledName name = MN ("tupled_"++(cairoName name)) 0 --Todo: A nice pref
 
 generateReTupledClosure : Name -> List LinearImplicit -> List CairoReg -> UntupleInfo -> (Name, CairoDef)
 generateReTupledClosure name linImpls args info = let (MkTupGenRes newNextReg sources code) = generateRetupling (snd retReg) 0 info (fst retReg)
-        in (deriveUntupledName name, FunDef args implicitParams ["tupledRet"] (((CALL sources callLinearImplicits name args)::code) ++ [RETURN [(fst retReg)] returnLinearImplicits]))
+        in (deriveUntupledName name, FunDef args implicitParams [CustomReg "tupledRet" Nothing] (((CALL sources callLinearImplicits name args)::code) ++ [RETURN [(fst retReg)] returnLinearImplicits]))
     where retReg : (CairoReg, RegisterGen)
           retReg = nextRegister (mkRegisterGen "retupling") 0
           implicitRegs : List CairoReg
           implicitRegs = snd $ foldl (\(n,acc), _ => (n+1, (Unassigned (Just "implicit") n 0)::acc)) (1, []) linImpls
           implicitParams : SortedMap LinearImplicit CairoReg
-          implicitParams = fromList $ map (\i => (i, NamedParam (implicitName i))) linImpls
+          implicitParams = fromList $ map (\i => (i, CustomReg (implicitName i) Nothing)) linImpls
           callLinearImplicits : SortedMap LinearImplicit (CairoReg, CairoReg)
-          callLinearImplicits = fromList $ map (\(i,r) => (i, (fromMaybe Eliminated (lookup i implicitParams), r))) (zip linImpls implicitRegs)
+          callLinearImplicits = fromList $ map (\(i,r) => (i, (fromMaybe (debugElimination "Untupling") (lookup i implicitParams), r))) (zip linImpls implicitRegs)
           returnLinearImplicits : SortedMap LinearImplicit CairoReg
           returnLinearImplicits = fromList $ zip linImpls implicitRegs
 
@@ -175,6 +232,8 @@ generateReTupledClosureDef : Name -> CairoDef -> UntupleInfo -> (Name, CairoDef)
 generateReTupledClosureDef name (FunDef args linImpls _ _) info = generateReTupledClosure name (keys linImpls) args info
 generateReTupledClosureDef name (ForeignDef i Z _) info = generateReTupledClosure name (implicits i) [] info
 generateReTupledClosureDef name (ForeignDef i (S remArgs) _) info = generateReTupledClosure name (implicits i) (map Param (fromZeroTo (cast remArgs))) info
+generateReTupledClosureDef _ (ExtFunDef _ _ _ _ _) _ = assert_total $ idris_crash "External functions are invalid closure targets"
+
 
 rewireUntupledClosures : SortedMap Name UntupleInfo -> List (Name, CairoDef) -> List (Name, CairoDef)
 rewireUntupledClosures inf defs = (mapMaybe genRetuplingFun (toList allUntupledClosures)) ++ (snd $ runVisitTransformCairoDefs (pureTraversal rewireTransform) defs)
@@ -210,10 +269,12 @@ untupledRets (Candidate tag fields) = foldl (\acc,sub => acc + untupledRets sub)
 untupledRets _ = 1
 
 adaptReturn : Maybe UntupleInfo -> (Name, CairoDef) -> (Name, CairoDef)
+adaptReturn (Just Undecided) nd = nd
+adaptReturn (Just Untouched) nd = nd
 adaptReturn (Just uinf) (name, ForeignDef linImpls argsN 1) = (name, ForeignDef linImpls argsN (cast (untupledRets uinf)))
 adaptReturn (Just uinf) (name, FunDef params implicits [_] body) = (name, FunDef params implicits retNames body)
-    where retNames : List String
-          retNames = map (\i => "r_"++(show i)) (fromZeroTo ((untupledRets uinf)-1))
+    where retNames : List CairoReg
+          retNames = map (\i => CustomReg ("r_"++(show i)) Nothing) (fromZeroTo ((untupledRets uinf)-1))
 adaptReturn _ def = def
 
 untupleDef : SortedMap Name UntupleInfo -> (Name, CairoDef) -> (Name, CairoDef)
@@ -247,12 +308,19 @@ untupleDef info def@(name,_) = adaptReturn (lookup name info) (orderUnassignedRe
           untuplerTransform VisitCaseEnd = map (\_ => [VisitCaseEnd]) (updateStateL rightLens (\x => x-1))
           untuplerTransform inst = pure [inst]
 
+isInternal : SortedMap Name CairoDef -> Name -> Bool
+isInternal allDefs name = case lookup name allDefs of
+    Nothing => trace "Ups should not happen" False -- Should never happen
+    (Just (ForeignDef _ _ _)) => False
+    (Just _) => True
+
 export
 untupling : List (Name, CairoDef) -> List (Name, CairoDef)
-untupling defs = rewireUntupledClosures untuplingTargets (map (untupleDef untuplingTargets) defs)
-    where directlyCalledTargets : SortedSet Name
-          directlyCalledTargets = fullyAppliedFunctionsDefs defs
-          untupledCallInfo :  SortedMap Name UntupleInfo
-          untupledCallInfo = iterFindTuplingTargetDefs empty (filter (\(n,_) => contains n directlyCalledTargets) defs)
-          untuplingTargets : SortedMap Name UntupleInfo
-          untuplingTargets = mergeLeft (untupledExtPrimDefs defs) untupledCallInfo
+untupling defs = let allDefs = fromList defs in
+                 let directlyCalledTargets = fullyAppliedFunctionsDefs defs in
+                 let untupledCallInfo = iterFindTuplingTargetDefs empty (filter (\(n,_) => contains n directlyCalledTargets) defs) in
+                 let unprofitableDefs = findUnprofitableUntuplingTargets defs in
+                 let unprofitableInternalDefs = setFilter (isInternal allDefs) unprofitableDefs in
+                 let profitableUntupledCallInfo = mapFilter (\(n,_) => not $ contains n unprofitableInternalDefs) untupledCallInfo in
+                 let untuplingTargets = mergeLeft (untupledExtPrimDefs defs) profitableUntupledCallInfo in
+                 rewireUntupledClosures untuplingTargets (map (untupleDef untuplingTargets) defs)

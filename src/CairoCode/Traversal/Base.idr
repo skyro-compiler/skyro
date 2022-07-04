@@ -60,7 +60,7 @@ Monad (Traversal s) where
 
 public export
 data InstVisit : Type -> Type where
-      VisitFunction : Name -> (params: List CairoReg) -> (implicits: SortedMap LinearImplicit CairoReg) -> (rets: List String) -> InstVisit a
+      VisitFunction : Name -> Maybe (List String) -> (params: List CairoReg) -> (implicits: SortedMap LinearImplicit CairoReg) -> (rets: List CairoReg) -> InstVisit a
       VisitForeignFunction : Name -> (info : ForeignInfo) -> (args:Nat) -> (rets:Nat) -> InstVisit a
       VisitAssign : (res:CairoReg) -> a -> InstVisit a
       VisitMkCon : (res:CairoReg) -> Maybe Int -> (args : List a) -> InstVisit a
@@ -70,6 +70,7 @@ data InstVisit : Type -> Type where
       VisitCall : List CairoReg -> (implicits: SortedMap LinearImplicit (a, CairoReg)) -> Name -> (args : List a) -> InstVisit a
       VisitOp : (res:CairoReg) -> (implicits: SortedMap LinearImplicit (a, CairoReg)) -> CairoPrimFn -> List a -> InstVisit a
       VisitExtprim : List CairoReg -> (implicits: SortedMap LinearImplicit (a, CairoReg)) -> Name -> List a -> InstVisit a
+      VisitStarkNetIntrinsic : CairoReg -> (implicits: SortedMap LinearImplicit (a, CairoReg))  -> StarkNetIntrinsic -> List a -> InstVisit a
       VisitCase : a -> InstVisit a
       VisitConBranch : Maybe Int -> InstVisit a
       VisitConstBranch : Maybe CairoConst -> InstVisit a
@@ -83,7 +84,7 @@ data InstVisit : Type -> Type where
 
 export
 Show a => Show (InstVisit a) where
-   show (VisitFunction _ _ _ _) = "VisitFunction"
+   show (VisitFunction _ _ _ _ _) = "VisitFunction"
    show (VisitForeignFunction _ _ _ _) = "VisitForeignFunction"
    show (VisitAssign _ _ ) = "VisitAssign"
    show (VisitMkCon _ _ _ ) = "VisitMkCon"
@@ -93,6 +94,7 @@ Show a => Show (InstVisit a) where
    show (VisitCall _ _ _ _) = "VisitCall"
    show (VisitOp _ _ _ _) = "VisitOp"
    show (VisitExtprim _ _ _ _) = "VisitExtprim"
+   show (VisitStarkNetIntrinsic _ _ _ _) = "VisitStarkNetIntrinsic"
    show (VisitCase _) = "VisitCase"
    show (VisitConBranch _ ) = "VisitConBranch"
    show (VisitConstBranch _ ) = "VisitConstBranch"
@@ -115,6 +117,7 @@ mutual
     fromCairoInst (CALL res implicits name args) = [VisitCall res implicits name args]
     fromCairoInst (OP res implicits fn args) = [VisitOp res implicits fn args]
     fromCairoInst (EXTPRIM res implicits name args) = [VisitExtprim res implicits name args]
+    fromCairoInst (STARKNETINTRINSIC res implicits intr args) = [VisitStarkNetIntrinsic res implicits intr args]
     fromCairoInst (CASE reg alts def) = (VisitCase reg)::(
         (alts >>= (\(t,b) => fromBlock (VisitConBranch (Just t)) b (VisitBranchEnd))) ++
         (fromMaybe [] (map (\b => fromBlock (VisitConBranch Nothing) b (VisitBranchEnd)) def)) ++
@@ -137,7 +140,8 @@ fromCairoInsts insts = foldr (\inst,acc => (fromCairoInst inst) ++ acc) [] insts
 
 export
 fromCairoDef : (Name, CairoDef) -> List (InstVisit CairoReg)
-fromCairoDef (name, FunDef params implicits rets body) = fromBlock (VisitFunction name params implicits rets) body VisitEndFunction
+fromCairoDef (name, FunDef params implicits rets body) = fromBlock (VisitFunction name Nothing params implicits rets) body VisitEndFunction
+fromCairoDef (name, ExtFunDef tags params implicits rets body) = fromBlock (VisitFunction name (Just tags) params implicits rets) body VisitEndFunction
 fromCairoDef (name, ForeignDef info args ret) = [VisitForeignFunction name info args ret, VisitEndFunction]
 
 caseInlineOptim : CairoInst -> List CairoInst
@@ -199,6 +203,7 @@ mutual
     toCairoInsts ((VisitCall res implicits name args)::xs) acc = toCairoInsts xs ((CALL res implicits name args)::acc)
     toCairoInsts ((VisitOp res implicits fn args)::xs) acc = toCairoInsts xs ((OP res implicits fn args)::acc)
     toCairoInsts ((VisitExtprim res implicits name args)::xs) acc = toCairoInsts xs ((EXTPRIM res implicits name args)::acc)
+    toCairoInsts ((VisitStarkNetIntrinsic res implicits intr args)::xs) acc = toCairoInsts xs ((STARKNETINTRINSIC res implicits intr args)::acc)
     toCairoInsts ((VisitCase reg)::(VisitCaseEnd)::xs) acc = toCairoInsts xs acc
     toCairoInsts ((VisitCase reg)::xs) acc = let (cI, rem) = toCairoCase reg xs in toCairoInsts rem ((reverse $ caseInlineOptim cI) ++ acc)
     toCairoInsts ((VisitProject res value pos)::xs) acc = toCairoInsts xs ((PROJECT res value pos)::acc)
@@ -207,13 +212,16 @@ mutual
     toCairoInsts ((VisitError res err)::xs) acc = toCairoInsts xs ((ERROR res err)::acc)
     toCairoInsts _ _ = assert_total $ idris_crash "Illegal Visitor Pattern"
 
+extractResult : (List CairoInst, List (InstVisit CairoReg)) -> List CairoInst
+extractResult (is, Nil) = is
+extractResult _ = assert_total $ idris_crash "Not fully parsed"
+
 export
 toCairoDef : List (InstVisit CairoReg) -> (Name, CairoDef)
-toCairoDef ((VisitFunction name params implicits rets)::xs) = (name, FunDef params implicits rets (extractResult (toCairoInsts xs [])))
-  where extractResult : (List CairoInst, List (InstVisit CairoReg)) -> List CairoInst
-        extractResult (is, Nil) = is
-        extractResult _ = assert_total $ idris_crash "Not fully parsed"
 toCairoDef ((VisitForeignFunction name info args ret)::VisitEndFunction::Nil) = (name, ForeignDef info args ret)
+toCairoDef ((VisitFunction name (Just tags) params implicits rets)::VisitEndFunction::Nil) = (name, ExtFunDef tags params implicits rets [])
+toCairoDef ((VisitFunction name Nothing params implicits rets)::xs) = (name, FunDef params implicits rets (extractResult (toCairoInsts xs [])))
+toCairoDef ((VisitFunction name (Just tags) params implicits rets)::xs) = (name, ExtFunDef tags params implicits rets (extractResult (toCairoInsts xs [])))
 toCairoDef _ = assert_total $ idris_crash "Visitor Pattern must start with a function declaration"
 
 export

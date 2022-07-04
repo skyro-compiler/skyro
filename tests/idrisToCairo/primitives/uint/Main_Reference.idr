@@ -16,11 +16,13 @@ main = do
   putStrLn . show $ the Bits8 200 .&. the Bits8 100
   putStrLn . show $ the Bits8 200 .|. the Bits8 100
   putStrLn . show $ the Bits8 200 `xor` the Bits8 100
+  putStrLn . show  $ the Bits8 100 `shiftL` 1
+  putStrLn . show  $ the Bits8 100 `shiftR` 1
+
   putStrLn . show . boolToInt $ the Bits8 200 < the Bits8 100
   putStrLn . show . boolToInt $ the Bits8 200 <= the Bits8 100
   putStrLn . show . boolToInt $ the Bits8 200 == the Bits8 100
   putStrLn . show . boolToInt $ the Bits8 200 >= the Bits8 100
   putStrLn . show . boolToInt $ the Bits8 200 > the Bits8 100
-  -- putStrLn . show  $ the Bits8 100 `shiftL` 1
-  -- putStrLn . show  $ the Bits8 100 `shiftR` 1
+
   

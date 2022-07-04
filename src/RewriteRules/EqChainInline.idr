@@ -133,6 +133,7 @@ mutual
 
 eqChainInlineDef : (Name, CairoDef) -> (Name, CairoDef)
 eqChainInlineDef (name, FunDef params implicits rets body) = (name, FunDef params implicits rets (processInsts empty body))
+eqChainInlineDef (name, ExtFunDef tags params implicits rets body) = (name, ExtFunDef tags params implicits rets (processInsts empty body))
 eqChainInlineDef def = def
 
 export

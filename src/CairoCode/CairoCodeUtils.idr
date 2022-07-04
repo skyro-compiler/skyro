@@ -23,6 +23,11 @@ Substitutions : Type
 Substitutions = CairoReg -> Maybe CairoReg
 
 substituteRegister : Substitutions -> CairoReg -> CairoReg
+substituteRegister subst (Eliminated (Replacement c)) = case subst c of
+    Nothing => Eliminated (Replacement c)
+    (Just nReg@(Eliminated _)) => nReg
+    (Just nReg) => Eliminated (Replacement nReg)
+substituteRegister subst e@(Eliminated _) = e
 substituteRegister subst reg = fromMaybe reg (subst reg)
 
 substituteRegisters : Substitutions -> List CairoReg -> List CairoReg
@@ -38,7 +43,7 @@ export
 substituteDefRegisters : Substitutions -> (Name, CairoDef) -> (Name, CairoDef)
 substituteDefRegisters subst def = snd $ runVisitTransformCairoDef (pureTraversal substituteTransform) def
     where substituteTransform : InstVisit CairoReg -> List (InstVisit CairoReg)
-          substituteTransform (VisitFunction name params linImpls rets) = [VisitFunction name (substituteRegisters subst params) (substituteRetLinearImplicits subst linImpls) rets]
+          substituteTransform (VisitFunction name tags params linImpls rets) = [VisitFunction name tags (substituteRegisters subst params) (substituteRetLinearImplicits subst linImpls) rets]
           substituteTransform (VisitAssign res reg) = [VisitAssign (substituteRegister subst res) (substituteRegister subst reg)]
           substituteTransform (VisitMkCon res tag args) = [VisitMkCon (substituteRegister subst res) tag (substituteRegisters subst args)]
           substituteTransform (VisitMkClosure res name miss args) = [VisitMkClosure (substituteRegister subst res) name miss (substituteRegisters subst args)]
@@ -47,6 +52,7 @@ substituteDefRegisters subst def = snd $ runVisitTransformCairoDef (pureTraversa
           substituteTransform (VisitCall res linImpls name args) = [VisitCall (substituteRegisters subst res) (substituteLinearImplicits subst linImpls) name (substituteRegisters subst args)]
           substituteTransform (VisitOp res linImpls fn args) = [VisitOp (substituteRegister subst res) (substituteLinearImplicits subst linImpls) fn (map (substituteRegister subst) args)]
           substituteTransform (VisitExtprim res linImpls name args) = [VisitExtprim (substituteRegisters subst res) (substituteLinearImplicits subst linImpls) name (substituteRegisters subst args)]
+          substituteTransform (VisitStarkNetIntrinsic res linImpls intr args) = [VisitStarkNetIntrinsic (substituteRegister subst res) (substituteLinearImplicits subst linImpls) intr (substituteRegisters subst args)]
           substituteTransform (VisitReturn res linImpls) = [VisitReturn (substituteRegisters subst res) (substituteRetLinearImplicits subst linImpls)]
           substituteTransform (VisitProject res reg pos) = [VisitProject (substituteRegister subst res) (substituteRegister subst reg) pos]
           substituteTransform (VisitNull res) = [VisitNull (substituteRegister subst res)]
@@ -72,20 +78,30 @@ subRegisterGen : CairoReg -> String -> RegisterGen
 subRegisterGen reg p = mkRegisterGen ((show reg) ++ "_" ++ p)
 
 export
+deriveRegisterGen : RegisterGen -> CairoReg -> RegisterGen
+deriveRegisterGen (p,i) reg = mkRegisterGen ((show reg) ++ "_" ++ p ++ "_" ++ (show i))
+
+export
+prefixedReg : String -> CairoReg -> CairoReg
+prefixedReg p1 (Unassigned (Just p2) i d) = Unassigned (Just (p1 ++ "_u_" ++ p2)) i d
+prefixedReg p1 (Unassigned Nothing i d) = Unassigned (Just (p1 ++ "_u")) i d
+prefixedReg p (Param i) = Unassigned (Just (p ++ "_p")) i 0
+prefixedReg p (CustomReg pn _) = Unassigned (Just (p ++ "_np_" ++ pn)) 0 0
+prefixedReg p (Local i d) = Unassigned (Just (p ++ "_lc")) i d
+prefixedReg p (Let i d) = Unassigned (Just (p ++ "_lt")) i d
+prefixedReg p (Temp i d) = Unassigned (Just (p ++ "_t")) i d
+prefixedReg p (Const c) = Unassigned (Just (p ++ "_c_" ++ (show c))) 0 0
+prefixedReg p (Eliminated (Replacement orig@(Eliminated _))) = prefixedReg p orig
+prefixedReg p (Eliminated (Replacement orig)) = prefixedReg (p ++ "_e") orig
+prefixedReg p (Eliminated _) = Unassigned (Just (p ++ "_e")) 0 0
+
+export
 deriveRegister : RegisterGen -> CairoReg -> CairoReg
-deriveRegister (p1,_) (Unassigned (Just p2) i d) = Unassigned (Just (p1 ++ "_u_" ++ p2)) i d
-deriveRegister (p1,_) (Unassigned Nothing i d) = Unassigned (Just (p1 ++ "_u")) i d
-deriveRegister (p,_) (Param i) = Unassigned (Just (p ++ "_p")) i 0
-deriveRegister (p,_) (NamedParam pn) = Unassigned (Just (p ++ "_np_" ++ pn)) 0 0
-deriveRegister (p,_) (Local i d) = Unassigned (Just (p ++ "_lc")) i d
-deriveRegister (p,_) (Let i d) = Unassigned (Just (p ++ "_lt")) i d
-deriveRegister (p,_) (Temp i d) = Unassigned (Just (p ++ "_t")) i d
-deriveRegister (p,_) (Const c) = Unassigned (Just (p ++ "_c_" ++ (show c))) 0 0
-deriveRegister (p,_) Eliminated = Unassigned (Just (p ++ "_e")) 0 0
+deriveRegister (p,_) reg = prefixedReg p reg
 
 export
 splitRegisterGen : RegisterGen -> (RegisterGen, RegisterGen)
-splitRegisterGen (p, n) = (("\{p}:\{show n}",0), (p, n+1))
+splitRegisterGen (p, n) = (("\{p}_\{show n}_split",0), (p, n+1))
 
 export
 nextRegister : RegisterGen -> (depth:Int) -> (CairoReg, RegisterGen)
@@ -150,3 +166,4 @@ countDefInsts def = snd $ runVisitConcatCairoDef (pureTraversal $ generalize gen
 export
 countDefsInsts : List (Name, CairoDef) -> Nat
 countDefsInsts defs = sum $ map countDefInsts defs
+

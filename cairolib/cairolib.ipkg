@@ -15,7 +15,11 @@ depends = base
 modules =
     Cairo.Output,
     Cairo,
+    Starknet.Types,
+    Starknet.Storage,
+    Starknet.Events,
     Starknet.Syscall,
+    Starknet.ABI,
     Starknet,
     Common.Casts,
     Common.Dict,
@@ -23,4 +27,6 @@ modules =
     Common.Felt,
     Common.Memory,
     Common.Pedersen,
+    Common.Segment,
+    Common.Encodings,
     Common

@@ -16,7 +16,7 @@ import Debug.Trace
 
 public export
 ValBindType : InstVisit a -> Type -> Type
-ValBindType (VisitFunction _ _ _ _) a = (List a, SortedMap LinearImplicit a)
+ValBindType (VisitFunction _ _ _ _ _) a = (List a, SortedMap LinearImplicit a)
 ValBindType (VisitForeignFunction _ _ _ _) a = ()
 ValBindType (VisitAssign _ _) a = a
 ValBindType (VisitMkCon _ _ _) a = a
@@ -26,6 +26,7 @@ ValBindType (VisitMkConstant _ _) a = a
 ValBindType (VisitCall _ _ _ _) a = (List a, SortedMap LinearImplicit a)
 ValBindType (VisitOp _ _ _ _) a = (a, SortedMap LinearImplicit a)
 ValBindType (VisitExtprim _ _ _ _) a = (List a, SortedMap LinearImplicit a)
+ValBindType (VisitStarkNetIntrinsic _ _ _ _) a = (a, SortedMap LinearImplicit a)
 ValBindType (VisitCase _) a = ()
 ValBindType (VisitConBranch _) a = Maybe a
 ValBindType (VisitConstBranch _) a = Maybe a
@@ -43,6 +44,7 @@ NoImplValBindType (VisitApply _ _ _ _) a = a
 NoImplValBindType (VisitCall _ _ _ _) a = List a
 NoImplValBindType (VisitOp _ _ _ _) a = a
 NoImplValBindType (VisitExtprim _ _ _ _) a = List a
+NoImplValBindType (VisitStarkNetIntrinsic _ _ _ _) a = a
 NoImplValBindType inst a = ValBindType inst a
 
 export
@@ -57,8 +59,9 @@ passThroughImpls fn = processImpls
           processImpls inst@(VisitCall _ linImpls _ _) = procImpls inst linImpls
           processImpls inst@(VisitOp _ linImpls _ _) = procImpls inst linImpls
           processImpls inst@(VisitExtprim _ linImpls _ _) = procImpls inst linImpls
+          processImpls inst@(VisitStarkNetIntrinsic _ linImpls _ _) = procImpls inst linImpls
           -- Sadly idris needs full pattern for the case where: NoImplValBindType inst a = ValBindType inst a
-          processImpls inst@(VisitFunction _ _ _ _) = fn inst
+          processImpls inst@(VisitFunction _ _ _ _ _) = fn inst
           processImpls inst@(VisitForeignFunction _ _ _ _) = fn inst
           processImpls inst@(VisitAssign _ _) = fn inst
           processImpls inst@(VisitMkCon _ _ _) = fn inst
@@ -152,8 +155,12 @@ getDistance reg = do
     pure $ map (\(dist,_) => dist) res
 
 export
+extractDepth : (ScopedBindings a) -> Int
+extractDepth bindings = div (cast $  length bindings) 2
+
+export
 getDepth : Traversal (ScopedBindings a) Int
-getDepth = pure (div (cast $  length !readState) 2)
+getDepth = pure $ extractDepth !readState
 
 export
 bindReg : CairoReg -> a -> Traversal (ScopedBindings a) ()
@@ -195,14 +202,14 @@ ascendCase = updateState update
                                                                      | - state -> end
 -}
 export
-valueTracker : Semigroup a => Lens os (ScopedBindings a) ->(CairoReg -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a)) -> (InstVisit CairoReg -> Traversal os ())
-valueTracker lens defaultCase tracker = seqTraversal handleCase (substituteInstVisitValue substitute doTracking)
+valueTracker : Semigroup a => Lens os (ScopedBindings a) -> (CairoReg -> a) -> (CairoReg -> a -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a)) -> (InstVisit CairoReg -> Traversal os ())
+valueTracker lens defaultCase prepareBinding tracker = seqTraversal handleCase (substituteInstVisitValue substitute doTracking)
     where lift : Traversal (ScopedBindings a) b -> Traversal os b
           lift = composeState lens 
           substitute : CairoReg -> Traversal os a
-          substitute Eliminated = tracker (VisitNull Eliminated)
-          substitute inst@(Const c) = tracker (VisitMkConstant inst c)
-          substitute reg = map (fromMaybe (defaultCase reg)) (lift $ getBinding reg)
+          substitute r@(Eliminated _) = map (prepareBinding r) (tracker (VisitNull r))
+          substitute inst@(Const c) = map (prepareBinding inst) (tracker (VisitMkConstant inst c))
+          substitute reg = map (prepareBinding reg) (map (fromMaybe (defaultCase reg)) (lift $ getBinding reg))
           bindSingle : CairoReg -> a -> Traversal os ()
           bindSingle r v = lift $ bindReg r v
           bindAll : List (CairoReg, a) -> Traversal os ()
@@ -221,7 +228,7 @@ valueTracker lens defaultCase tracker = seqTraversal handleCase (substituteInstV
           rebindCaseReg Nothing = pure ()
           rebindCaseReg (Just av) = lift getCaseReg >>= (\mReg => fromMaybe (pure ()) (map (\reg => bindSingle reg av) mReg))
           doTracking : InstVisit a -> Traversal os ()
-          doTracking inst@(VisitFunction _ params impls _) = do
+          doTracking inst@(VisitFunction _ _ params impls _) = do
             _ <- writeStateL lens ((BlockScope empty)::Nil)    -- start with a fresh block (we can not use descend as this expect a parent vlock
             (pramVs, implVs) <- tracker inst
             bindAll ((zip params pramVs) ++ getPlainImplBindings impls implVs)
@@ -234,6 +241,7 @@ valueTracker lens defaultCase tracker = seqTraversal handleCase (substituteInstV
           doTracking inst@(VisitCall res impls _ _) = tracker inst >>= (\(resV, implVs) => bindAll ((zip res resV) ++ (getImplBindings impls implVs)))
           doTracking inst@(VisitOp res impls _ _) = tracker inst >>= (\(resV, implVs) => bindAll ((res,resV)::(getImplBindings impls implVs)))
           doTracking inst@(VisitExtprim res impls _ _) = tracker inst >>= (\(resV, implVs) => bindAll ((zip res resV) ++ (getImplBindings impls implVs)))
+          doTracking inst@(VisitStarkNetIntrinsic res impls _ _) = tracker inst >>= (\(resV, implVs) => bindAll ((res, resV)::(getImplBindings impls implVs)))
           doTracking (VisitCase caseReg) = pure () -- Already handled by handleCase
           doTracking inst@(VisitConBranch _) = (lift descendBranch) >>= (\_ => tracker inst >>= rebindCaseReg)
           doTracking inst@(VisitConstBranch _) = (lift descendBranch) >>= (\_ => tracker inst >>= rebindCaseReg)
@@ -260,12 +268,12 @@ initialTrackerState = Nil
                         | - value (a) & state -> collector - value (b) & state -> end
 -}
 export
-valueCollector : Semigroup a => Lens os (ScopedBindings a) -> (CairoReg -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a))  -> (InstVisit a -> Traversal os b) -> (InstVisit CairoReg -> Traversal os b)
-valueCollector lens defaultCase tracker collector = seqTraversal (valueTracker lens defaultCase tracker) (substituteInstVisitValue substitute collector)
+valueCollector : Semigroup a => Lens os (ScopedBindings a) -> (CairoReg -> a) -> (CairoReg -> a -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a))  -> (InstVisit a -> Traversal os b) -> (InstVisit CairoReg -> Traversal os b)
+valueCollector lens defaultCase prepareBinding tracker collector = seqTraversal (valueTracker lens defaultCase prepareBinding tracker) (substituteInstVisitValue substitute collector)
     where substitute : CairoReg -> Traversal os a
-          substitute Eliminated = tracker (VisitNull Eliminated)
-          substitute inst@(Const c) = tracker (VisitMkConstant inst c)
-          substitute reg = map (fromMaybe (defaultCase reg)) (composeState lens (getBinding reg))
+          substitute r@(Eliminated _) = map (prepareBinding r) (tracker (VisitNull r))
+          substitute inst@(Const c) = map (prepareBinding inst) (tracker (VisitMkConstant inst c))
+          substitute reg = map (prepareBinding reg) (map (fromMaybe (defaultCase reg)) (composeState lens (getBinding reg)))
 {-
  A value tracker with an added transformation step in front of the tracking which is used to produce the result and tracking input
                                                     | --------------------------- use same binding state --------------------------- |
@@ -273,20 +281,20 @@ valueCollector lens defaultCase tracker collector = seqTraversal (valueTracker l
                                                                                        | - [value (Reg)] ------> end <------ state ------------ |
 -}
 export
-valueTransformer : Semigroup a => Lens os (ScopedBindings a) -> (CairoReg -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a)) -> (InstVisit a -> Traversal os (List (InstVisit CairoReg))) -> (InstVisit CairoReg -> Traversal os (List (InstVisit CairoReg)))
-valueTransformer lens defaultCase tracker transformer = traverseTransform (substituteInstVisitValue substitute transformer) plainTracker
+valueTransformer : Semigroup a => Lens os (ScopedBindings a) -> (CairoReg -> a) -> (CairoReg -> a -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a)) -> (InstVisit a -> Traversal os (List (InstVisit CairoReg))) -> (InstVisit CairoReg -> Traversal os (List (InstVisit CairoReg)))
+valueTransformer lens defaultCase prepareBinding tracker transformer = traverseTransform (substituteInstVisitValue substitute transformer) plainTracker
     where substitute : CairoReg -> Traversal os a
-          substitute Eliminated = tracker (VisitNull Eliminated)
-          substitute inst@(Const c) = tracker (VisitMkConstant inst c)
-          substitute reg = map (fromMaybe (defaultCase reg)) (composeState lens (getBinding reg))
+          substitute r@(Eliminated _) = map (prepareBinding r) (tracker (VisitNull r))
+          substitute inst@(Const c) = map (prepareBinding inst) (tracker (VisitMkConstant inst c))
+          substitute reg = map (prepareBinding reg) (map (fromMaybe (defaultCase reg)) (composeState lens (getBinding reg)))
           plainTracker : InstVisit CairoReg -> Traversal os ()
-          plainTracker = valueTracker lens defaultCase tracker
+          plainTracker = valueTracker lens defaultCase prepareBinding tracker
 
 export
 defaultNoImplValBind : (CairoReg -> a) -> ((v1:InstVisit a) -> Traversal s (Maybe (NoImplValBindType v1 a))) -> ((v2:InstVisit a) -> Traversal s (NoImplValBindType v2 a))
 defaultNoImplValBind defaultGen specific = (\inst => map (fromMaybe (fallback inst)) (specific inst))
     where fallback : (v1:InstVisit a) -> NoImplValBindType v1 a
-          fallback (VisitFunction _ params impl _) = (map defaultGen params, fromList $  map (\(k,v) => (k, defaultGen v))(toList impl))
+          fallback (VisitFunction _ _ params impl _) = (map defaultGen params, fromList $  map (\(k,v) => (k, defaultGen v))(toList impl))
           fallback (VisitForeignFunction _ _ _ _)  = ()
           fallback (VisitAssign res _)  = defaultGen res
           fallback (VisitMkCon res _ _)  = defaultGen res
@@ -295,7 +303,8 @@ defaultNoImplValBind defaultGen specific = (\inst => map (fromMaybe (fallback in
           fallback (VisitMkConstant res _) = defaultGen res
           fallback (VisitCall res impl _ _) = map defaultGen res
           fallback (VisitOp res impl _ _) = defaultGen res
-          fallback (VisitExtprim res impl _ _) =map defaultGen res
+          fallback (VisitExtprim res impl _ _) = map defaultGen res
+          fallback (VisitStarkNetIntrinsic res impl _ _) = defaultGen res
           fallback (VisitCase _)  = ()
           fallback (VisitConBranch _) = Nothing
           fallback (VisitConstBranch _) = Nothing
@@ -311,7 +320,7 @@ export
 defaultValBind : (CairoReg -> a) -> ((v1:InstVisit a) -> Traversal s (Maybe (ValBindType v1 a))) -> ((v2:InstVisit a) -> Traversal s (ValBindType v2 a))
 defaultValBind defaultGen specific = (\inst => map (fromMaybe (fallback inst)) (specific inst))
     where fallback : (v1:InstVisit a) -> ValBindType v1 a
-          fallback (VisitFunction _ params impl _) = (map defaultGen params, mapValueMap defaultGen impl)
+          fallback (VisitFunction _ _ params impl _) = (map defaultGen params, mapValueMap defaultGen impl)
           fallback (VisitForeignFunction _ _ _ _)  = ()
           fallback (VisitAssign res _)  = defaultGen res
           fallback (VisitMkCon res _ _)  = defaultGen res
@@ -321,6 +330,7 @@ defaultValBind defaultGen specific = (\inst => map (fromMaybe (fallback inst)) (
           fallback (VisitCall res impl _ _) = (map defaultGen res, mapValueMap (defaultGen . snd) impl)
           fallback (VisitOp res impl _ _) = (defaultGen res,  mapValueMap (defaultGen . snd) impl)
           fallback (VisitExtprim res impl _ _) = (map defaultGen res,  mapValueMap (defaultGen . snd) impl)
+          fallback (VisitStarkNetIntrinsic res impl _ _) = (defaultGen res,  mapValueMap (defaultGen . snd) impl)
           fallback (VisitCase _)  = ()
           fallback (VisitConBranch _) = Nothing
           fallback (VisitConstBranch _) = Nothing
@@ -352,7 +362,7 @@ generalizeTrack paramInit resGen implGen = generalized
           failHead (x::xs) = x
           failHead _ = assert_total $ idris_crash "Expected non empty list"
           generalized : (v:(InstVisit a)) -> Traversal s (ValBindType v a)
-          generalized (VisitFunction _ params impls _) = pure (map (paramInit Nothing) params, mapMap (\(impl,reg) => (impl, paramInit (Just impl) reg)) impls)
+          generalized (VisitFunction _ _ params impls _) = pure (map (paramInit Nothing) params, mapMap (\(impl,reg) => (impl, paramInit (Just impl) reg)) impls)
           generalized (VisitForeignFunction _ _ _ _) = pure ()
           generalized (VisitAssign res reg) = map failHead (resGen [res] [reg])
           generalized (VisitMkCon res _ args) = map failHead (resGen [res] args)
@@ -360,8 +370,9 @@ generalizeTrack paramInit resGen implGen = generalized
           generalized (VisitApply res linImpls clo arg) = pure (failHead !(resGen [res] [clo,arg]), !(implGen linImpls))
           generalized (VisitMkConstant res _) = map failHead (resGen [res] [])
           generalized (VisitCall res linImpls _ args) = pure (!(resGen res args), !(implGen linImpls))
-          generalized (VisitOp res linImpls _ args) = pure (failHead  !(resGen [res] args), !(implGen linImpls))
+          generalized (VisitOp res linImpls _ args) = pure (failHead !(resGen [res] args), !(implGen linImpls))
           generalized (VisitExtprim res linImpls _ args) = pure (!(resGen res args), !(implGen linImpls))
+          generalized (VisitStarkNetIntrinsic res linImpls _ args) = pure (failHead !(resGen [res] args), !(implGen linImpls))
           generalized (VisitCase _) = pure ()
           generalized (VisitConBranch _) = pure Nothing
           generalized (VisitConstBranch _) = pure Nothing

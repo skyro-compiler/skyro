@@ -21,5 +21,52 @@ import public Common.Pedersen
 import public Common.Felt
 import public Common.Dict
 import public Common.Memory
-import public Starknet.Syscall
+import public Common.Segment
+import public Common.Encodings
 
+import public Starknet.Types
+import public Starknet.Storage
+import public Starknet.Events
+import public Starknet.Syscall
+import public Starknet.ABI
+
+import Data.Maybe
+
+------------------------------------------------------
+-- Implementation of the StarkNet interfaces 
+-- `View`, `External`, `Constructor` and `L1Handler`
+------------------------------------------------------
+
+public export %inline
+View Cairo where
+  readStorage = readStorageHelper
+  getBlockNumber = getBlockNumberHelper
+  getBlockTimestamp = getBlockTimestampHelper
+  getCallerAddress = getCallerAddressHelper
+  getContractAddress = getContractAddressHelper
+  getSequencerAddress = getSequencerAddressHelper
+
+
+public export %inline
+External Cairo where
+  writeStorage = writeStorageHelper
+  emitEvent = emitEventHelper
+  deploy = deployHelper
+  callContract = callContractHelper
+  libraryCall = libraryCallHelper
+  libraryCallL1Handler = libraryCallL1HandlerHelper
+
+
+public export %inline
+Constructor Cairo where 
+
+public export %inline
+L1Handler Cairo where 
+
+----------------------------------------------------------------- 
+-- Entry point generator code
+----------------------------------------------------------------
+
+export
+unsafePerformIO : String -> String
+unsafePerformIO s = s

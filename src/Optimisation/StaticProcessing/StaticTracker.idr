@@ -54,6 +54,11 @@ mutual
     Show StaticInfo where
         show (MKStaticInfo sources value) = "{" ++ (show sources) ++ "} = " ++ (show value)
 
+
+export
+defaultInfo: String -> StaticValue -> StaticInfo
+defaultInfo n v = MKStaticInfo (singleton (debugElimination n)) v
+
 -- Conversions
 export
 toValueInfo : StaticInfo -> ValueInfo
@@ -73,44 +78,53 @@ toValueInfo (MKStaticInfo regs _) = process (toList regs)
 
 export
 fromValueInfo : ValueInfo -> StaticInfo
-fromValueInfo UnknownValue = MKStaticInfo empty Unknown
+fromValueInfo UnknownValue = defaultInfo "ST_from_value_info" Unknown
 fromValueInfo (ConstValue c) = MKStaticInfo (singleton (Const c)) (Const (singleton c))
-fromValueInfo (CompositeValue tag fields) = MKStaticInfo empty (Constructed (fromList [(tag, map fromValueInfo fields)]))
-fromValueInfo (ClosureValue name miss captures) = MKStaticInfo empty (Closure (Just (name,miss)) (map fromValueInfo captures))
+fromValueInfo (CompositeValue tag fields) = defaultInfo "ST_from_value_info_2" (Constructed (fromList [(tag, map fromValueInfo fields)]))
+fromValueInfo (ClosureValue name miss captures) = defaultInfo "ST_from_value_info_3" (Closure (Just (name,miss)) (map fromValueInfo captures))
 
 fromEvalRes : EvalRes -> List StaticInfo -> StaticInfo
-fromEvalRes (Failure s) _ = MKStaticInfo empty (Error s)
+fromEvalRes (Failure s) _ = defaultInfo "ST_from_eval_res" (Error s)
 fromEvalRes (NewValue val) _ = fromValueInfo val
 fromEvalRes (ArgValue Z) (x::xs) = x
 fromEvalRes (ArgValue (S rem)) (x::xs) = fromEvalRes (ArgValue rem) xs
 fromEvalRes _ _ = assert_total $ idris_crash "can not process eval res"
 
 mutual
-    mergeStaticValue : StaticValue -> StaticValue -> StaticValue
-    mergeStaticValue (Error _) other = other -- The error would crash program so if we arrive here it is the other
-    mergeStaticValue other (Error _) = other -- The error would crash program so if we arrive here it is the other
-    mergeStaticValue (Const vs1) (Const vs2) = Const (union vs1 vs2)
-    mergeStaticValue (Constructed c1) (Constructed c2) = Constructed (mergeWith mergeFields c1 c2)
+    mergeStaticValue : Maybe CairoReg -> StaticValue -> StaticValue -> StaticValue
+    mergeStaticValue _ (Error _) other = other -- The error would crash program so if we arrive here it is the other
+    mergeStaticValue _ other (Error _) = other -- The error would crash program so if we arrive here it is the other
+    mergeStaticValue _ (Const vs1) (Const vs2) = Const (union vs1 vs2)
+    mergeStaticValue fallback (Constructed c1) (Constructed c2) = Constructed (mergeWith mergeFields c1 c2)
         where mergeFields: List StaticInfo -> List StaticInfo -> List StaticInfo
-              mergeFields f1 f2 = zipWith mergeStaticInfo f1 f2
-    mergeStaticValue (Closure n1 f1) (Closure n2 f2) = Closure (mergeNames n1 n2) (zipWith mergeStaticInfo f1 f2)
+              mergeFields f1 f2 = zipWith (mergeStaticInfo fallback) f1 f2
+    mergeStaticValue fallback (Closure n1 f1) (Closure n2 f2) = Closure (mergeNames n1 n2) (zipWith (mergeStaticInfo fallback) f1 f2)
         where mergeNames : Maybe (Name, Nat) -> Maybe (Name, Nat) -> Maybe (Name, Nat)
               mergeNames (Just (n1, m1)) (Just (n2, m2)) = if n1 == n2 && m1 == m2 then Just (n1, m1) else Nothing
               mergeNames _ _ = Nothing
     -- todo: shall we go to Unknown if both tags are diff and remove maybe?
-    mergeStaticValue (Field s1 t1 p1) (Field s2 t2 p2) = if p1 /= p2 then Unknown else Field (mergeStaticInfo s1 s2) (mergeTag t1 t2) p1
+    mergeStaticValue fallback (Field s1 t1 p1) (Field s2 t2 p2) = if p1 /= p2 then Unknown else Field (mergeStaticInfo fallback s1 s2) (mergeTag t1 t2) p1
         where mergeTag : Maybe Int -> Maybe Int -> Maybe Int
               mergeTag (Just t1) (Just t2) = if t1 == t2 then Just t1 else Nothing
               mergeTag _ _ = Nothing
-    mergeStaticValue _ _ = Unknown
+    mergeStaticValue _ _ _ = Unknown
 
     export
-    mergeStaticInfo : StaticInfo -> StaticInfo -> StaticInfo
-    mergeStaticInfo (MKStaticInfo regs1 vals1) (MKStaticInfo regs2 vals2) = MKStaticInfo (intersection regs1 regs2) (mergeStaticValue vals1 vals2)
+    mergeStaticInfo : Maybe CairoReg -> StaticInfo -> StaticInfo -> StaticInfo
+    mergeStaticInfo fallback (MKStaticInfo regs1 vals1) (MKStaticInfo regs2 vals2) = MKStaticInfo (safeMerge fallback) (mergeStaticValue fallback vals1 vals2)
+        where merged : SortedSet CairoReg
+              merged = (intersection regs1 regs2)
+              safeMerge : Maybe CairoReg -> SortedSet CairoReg
+              safeMerge Nothing = merged
+              safeMerge (Just def) = if merged == empty
+                then singleton def
+                else merged
 
+-- Used for merging scopes at the end of branches
+-- for other merges another fallback should be used
 export
 Semigroup StaticInfo where
-   (<+>) = mergeStaticInfo
+   (<+>) = mergeStaticInfo (Just (Eliminated Unreachable))
 
 export
 addBinding : StaticInfo -> CairoReg -> StaticInfo
@@ -164,15 +178,17 @@ asConstants args = if (all isJust mappedConstants) then Just (mappedConstants >>
           maybeToList Nothing = []
 
 export
-extractField : SortedMap Int (List StaticInfo) -> Nat -> StaticInfo
-extractField ctrs pos = mergeAll (map (extract pos) (values ctrs))
-    where extract : Nat -> List StaticInfo -> StaticInfo
-          extract _ Nil = MKStaticInfo empty Unknown
-          extract Z (f::fs) = f
-          extract (S rem) (f::fs) = extract rem fs
-          mergeAll : List StaticInfo -> StaticInfo
-          mergeAll Nil = MKStaticInfo empty Unknown
-          mergeAll (i::is) = foldl1 mergeStaticInfo (i::is)
+extractArg : Nat -> List StaticInfo -> StaticInfo
+extractArg _ Nil = defaultInfo "ST_extract_arg" Unknown
+extractArg Z (f::_) = f
+extractArg (S rem) (_::fs) = extractArg rem fs
+
+export
+extractField : Nat -> SortedMap Int (List StaticInfo) -> StaticInfo
+extractField pos ctrs = mergeAll (map (extractArg pos) (values ctrs))
+    where mergeAll : List StaticInfo -> StaticInfo
+          mergeAll Nil = defaultInfo "ST_extract_field" Unknown
+          mergeAll (i::is) = foldl1 (mergeStaticInfo (Just (Eliminated Disjoint))) (i::is)
 
 extractSingleTag : SortedMap Int (List StaticInfo) -> Maybe Int
 extractSingleTag s = extract (keys s)
@@ -191,18 +207,19 @@ staticImplTracker impls = mapValueMap (\(_, reg) => MKStaticInfo (singleton reg)
 
 export
 staticValueTracker : (v:InstVisit StaticInfo) -> Traversal (ScopedBindings StaticInfo) (ValBindType v StaticInfo)
-staticValueTracker (VisitFunction _ params impls _) = pure (map paramInit params, mapValueMap paramInit impls)
+staticValueTracker (VisitFunction _ _ params impls _) = pure (map paramInit params, mapValueMap paramInit impls)
     where paramInit : CairoReg -> StaticInfo
           paramInit reg = MKStaticInfo (singleton reg) Unknown
 staticValueTracker (VisitForeignFunction _ _ _ _) = pure ()
 staticValueTracker (VisitAssign r constInfo) = pure $ addBinding constInfo r
 staticValueTracker (VisitMkCon r tag args) = pure $ addBinding (MKStaticInfo (findRepackedSrcs (resolveTag tag) args) (Constructed (singleton (resolveTag tag) args))) r
 staticValueTracker (VisitMkClosure r name missing args) = pure $ MKStaticInfo (singleton r) (Closure (Just (name, missing)) args)
-staticValueTracker (VisitApply r impls (MKStaticInfo regs (Closure (Just (name, Z)) args)) arg) = pure (MKStaticInfo (singleton r) Unknown, staticImplTracker impls)
+staticValueTracker (VisitApply r impls (MKStaticInfo regs (Closure (Just (name, 1)) args)) arg) = pure (MKStaticInfo (singleton r) Unknown, staticImplTracker impls)
 staticValueTracker (VisitApply r impls (MKStaticInfo regs (Closure (Just (name, (S rem))) args)) arg) = pure (MKStaticInfo (singleton r) (Closure (Just (name, rem)) (args ++ [arg])), staticImplTracker impls)
 staticValueTracker (VisitApply r impls _ _) = pure (MKStaticInfo (singleton r) Unknown, staticImplTracker impls)
 staticValueTracker (VisitMkConstant r const) = pure $ MKStaticInfo (singleton r) (Const (singleton const))
 staticValueTracker (VisitCall rs impls _ _) = pure (map (\r => MKStaticInfo (singleton r) Unknown) rs, staticImplTracker impls)
+staticValueTracker (VisitStarkNetIntrinsic r impls _ _) = pure (MKStaticInfo (singleton r) Unknown, staticImplTracker impls)
 staticValueTracker (VisitExtprim rs impls name args) = pure (result (externalEval name (length rs) (map toValueInfo args)), staticImplTracker impls)
     where result : Maybe (List EvalRes) -> List StaticInfo
           result Nothing = map (\r => MKStaticInfo (singleton r) Unknown) rs
@@ -213,7 +230,11 @@ staticValueTracker (VisitOp r impls fn args) = pure (result (evaluateConstantOp 
     where result : Maybe EvalRes -> StaticInfo
           result Nothing = MKStaticInfo (singleton r) Unknown
           result (Just res) = addBinding (fromEvalRes res args) r
-staticValueTracker (VisitProject r src@(MKStaticInfo _ (Constructed ctrs)) pos) = pure $ result (extractField ctrs pos)
+staticValueTracker (VisitProject r src@(MKStaticInfo _ (Closure _ args)) pos) = pure $ result (extractArg pos args)
+    where result : StaticInfo -> StaticInfo
+          result (MKStaticInfo _ Unknown) = MKStaticInfo (singleton r) (Field src Nothing pos)
+          result field = addBinding field r
+staticValueTracker (VisitProject r src@(MKStaticInfo _ (Constructed ctrs)) pos) = pure $ result (extractField pos ctrs )
     where result : StaticInfo -> StaticInfo
           result (MKStaticInfo _ Unknown) = MKStaticInfo (singleton r) (Field src (extractSingleTag ctrs) pos)
           result field = addBinding field r
@@ -238,16 +259,18 @@ staticValueTracker VisitEndFunction = pure ()
 -- This is non generic/local folder -- we keep for now: as it is simpler and more efficient
 export
 localStaticTrackDef : (Name, CairoDef) -> List StaticInfo
-localStaticTrackDef def = collect $ snd $ runVisitConcatCairoDef (valueCollector idLens (dbgDef def) staticValueTracker extractReturn, initialTrackerState) def
+localStaticTrackDef def = collect $ snd $ runVisitConcatCairoDef (valueCollector idLens (dbgDef def) prepareB staticValueTracker extractReturn, initialTrackerState) def
     where dbgDef : (Name, CairoDef) -> CairoReg -> StaticInfo
           dbgDef (name, def) reg = trace "Register not bound in \{show name}: \{show reg}" (MKStaticInfo (singleton reg) Unknown)
+          prepareB : CairoReg -> StaticInfo -> StaticInfo
+          prepareB r rs = addBinding rs r
           extractReturn : InstVisit StaticInfo -> Traversal (ScopedBindings StaticInfo) (List (List StaticInfo))
           extractReturn (VisitReturn rets _) = pure [rets]
           extractReturn _ = pure Nil
           collect : (List (List StaticInfo)) -> (List StaticInfo)
           collect Nil = trace "Tracked function has no return statement" Nil
           collect (x::Nil) = x
-          collect (x1::x2::xs) = collect ((zipWith mergeStaticInfo x1 x2)::xs)
+          collect (x1::x2::xs) = collect ((zipWith (mergeStaticInfo Nothing) x1 x2)::xs)
 
 -- A version witch allows generified call handling --
 public export
@@ -255,6 +278,9 @@ record GlobalStaticTrackerState s where
     constructor MkGlobalStaticTrackerState
     bindingState : ScopedBindings StaticInfo
     globalState : s
+
+getDepth : Traversal (GlobalStaticTrackerState s) Int
+getDepth = pure $ extractDepth $ bindingState !readState
 
 -- Lenses for leaner and more readable main definitions
 bindingStateLens : Lens (GlobalStaticTrackerState s) (ScopedBindings StaticInfo)
@@ -267,6 +293,7 @@ public export
 record CallData where
     constructor MKCallData
     function: Name
+    depth : Int
     implicits: SortedMap LinearImplicit (StaticInfo, CairoReg)
     arguments : List StaticInfo
     returns: List CairoReg
@@ -287,7 +314,7 @@ interface CallTracker s where
               paramInit reg = MKStaticInfo (singleton reg) Unknown
     process_return _ _ s = s
     process _ s = s
-    track (MKCallData _ impls _ rs) _ = (map (\r => MKStaticInfo (singleton r) Unknown) rs, staticImplTracker impls)
+    track (MKCallData _ _ impls _ rs) _ = (map (\r => MKStaticInfo (singleton r) Unknown) rs, staticImplTracker impls)
 
 export
 trackCall : CallTracker s => CallData -> Traversal (GlobalStaticTrackerState s) (List StaticInfo, SortedMap LinearImplicit StaticInfo)
@@ -299,19 +326,21 @@ trackCall callData = update >>= (\_ => compute)
 
 export
 globalStaticTrackDef : CallTracker s => SortedMap Name CairoDef -> s -> (Name, CairoDef) -> (s, List StaticInfo)
-globalStaticTrackDef defs globalState def = collect $ runVisitConcatCairoDef (valueCollector bindingStateLens (dbgDef def) customizedStaticValueTracker extractReturn, initialState) def
+globalStaticTrackDef defs globalState def = collect $ runVisitConcatCairoDef (valueCollector bindingStateLens (dbgDef def) prepareB customizedStaticValueTracker extractReturn, initialState) def
           -- these just lift traversals defined on (ScopedBindings StaticInfo) to work with (GlobalStaticTrackerState s) by using a lense to point to the LocalStaticOptimState
     where liftedStaticValueTracker: (v:InstVisit StaticInfo) -> Traversal (GlobalStaticTrackerState s) (ValBindType v StaticInfo)
           liftedStaticValueTracker inst = composeState bindingStateLens (staticValueTracker inst)
           -- These use the CallTracker to customize the value Tracker
           -- we use explicit branching for 'customizedStaticValueTracker' because 'fallbackTraversal' has problems handling dependent type 'ValBindType v StaticInfo'
           customizedStaticValueTracker : (v:InstVisit StaticInfo) -> Traversal (GlobalStaticTrackerState s) (ValBindType v StaticInfo)
-          customizedStaticValueTracker (VisitCall rs impls name args) = trackCall (MKCallData name impls args rs)
-          customizedStaticValueTracker (VisitFunction _ params impls _) = map (context (params, impls)) (readStateL globalStateLens)
+          customizedStaticValueTracker (VisitCall rs impls name args) = getDepth >>= (\d => trackCall (MKCallData name d impls args rs))
+          customizedStaticValueTracker (VisitFunction _ _ params impls _) = map (context (params, impls)) (readStateL globalStateLens)
           customizedStaticValueTracker (VisitReturn res impls) = updateStateL globalStateLens (process_return res impls)
           customizedStaticValueTracker inst = liftedStaticValueTracker inst
           dbgDef : (Name, CairoDef) -> CairoReg -> StaticInfo
           dbgDef (name, def) reg = trace "Register not bound in \{show name}: \{show reg}" (MKStaticInfo (singleton reg) Unknown)
+          prepareB : CairoReg -> StaticInfo -> StaticInfo
+          prepareB r rs = addBinding rs r
           extractReturn : InstVisit StaticInfo -> Traversal (GlobalStaticTrackerState s) (List (List StaticInfo))
           extractReturn (VisitReturn rets _) = pure [rets]
           extractReturn _ = pure Nil
@@ -320,4 +349,4 @@ globalStaticTrackDef defs globalState def = collect $ runVisitConcatCairoDef (va
           collect : (GlobalStaticTrackerState s, List (List StaticInfo)) -> (s, List StaticInfo)
           collect (s, Nil) = trace "Tracked function has no return statement" (s.globalState, Nil)
           collect (s, x::Nil) = (s.globalState, x)
-          collect (s, x1::x2::xs) = collect (s, (zipWith mergeStaticInfo x1 x2)::xs)
+          collect (s, x1::x2::xs) = collect (s, (zipWith (mergeStaticInfo Nothing) x1 x2)::xs)

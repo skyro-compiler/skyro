@@ -51,10 +51,11 @@ main = do
   out $ u_200 .&. u_100
   out $ u_200 .|. u_100 
   out $ u_200 `xor` u_100
+  out $ u_100 `shiftL` 1 -- Index is of type Nat. Not implemented yet
+  out $ u_100 `shiftR` 1
+
   out $ u_200 < u_100
   out $ u_200 <= u_100
   out $ u_200 == u_100
   out $ u_200 >= u_100
   out $ u_200 > u_100
-  -- out $ u_100 `shiftL` 1 -- Index is of type Nat. Not implemented yet
-  -- out $ u_100 `shiftR` 1

@@ -13,7 +13,7 @@ export
 generalize : ((rets:List CairoReg) -> SortedMap LinearImplicit (a, CairoReg) -> (params:List a) -> b) -> (InstVisit a -> b)
 generalize fn = generalized
     where generalized : InstVisit a -> b
-          generalized (VisitFunction _ _ _ _) = fn [] empty []
+          generalized (VisitFunction _ _ _ _ _) = fn [] empty []
           generalized (VisitForeignFunction _ _ _ _) = fn [] empty []
           generalized (VisitAssign res reg) = fn [res] empty [reg]
           generalized (VisitMkCon res _ args) = fn [res] empty args
@@ -23,6 +23,7 @@ generalize fn = generalized
           generalized (VisitCall res linImpls _ args) = fn res linImpls args
           generalized (VisitOp res linImpls _ args) = fn [res] linImpls args
           generalized (VisitExtprim res linImpls _ args) = fn res linImpls args
+          generalized (VisitStarkNetIntrinsic res linImpls _ args) = fn [res] linImpls args
           generalized (VisitReturn res _) = fn [] empty res -- Todo: Shall we Map implicits and pass in? to LinearImplicit -> (CairoReg, Eliminated)
           generalized (VisitProject res src _) = fn [res] empty [src]
           generalized (VisitNull res) = fn [res] empty []
@@ -41,7 +42,7 @@ export
 ignoreControl : (InstVisit a -> Traversal s (List (InstVisit a))) -> (InstVisit a -> Traversal s (List (InstVisit a)))
 ignoreControl fn = forwardControls
     where forwardControls : InstVisit a -> Traversal s (List (InstVisit a))
-          forwardControls inst@(VisitFunction _ _ _ _) = pure [inst]
+          forwardControls inst@(VisitFunction _ _ _ _ _) = pure [inst]
           forwardControls inst@(VisitForeignFunction _ _ _ _) = pure [inst]
           forwardControls VisitEndFunction = pure [VisitEndFunction]
           forwardControls inst@(VisitCase _ ) = pure [inst]
@@ -62,7 +63,7 @@ substituteInstVisitValue subst fn = (\inst => (substitute inst) >>= fn)
           substRetImpls : SortedMap LinearImplicit a -> Traversal s (SortedMap LinearImplicit b)
           substRetImpls linImpls = map fromList (traverse (\(impl,from) => pure (impl,!(subst from))) (toList linImpls))
           substitute : (InstVisit a -> Traversal s (InstVisit b))
-          substitute (VisitFunction name params linImpls rets) = pure $ VisitFunction name params linImpls rets
+          substitute (VisitFunction name tags params linImpls rets) = pure $ VisitFunction name tags params linImpls rets
           substitute (VisitForeignFunction name inf args rets) = pure $ VisitForeignFunction name inf args rets
           substitute (VisitAssign res src) = pure $ VisitAssign res !(subst src)
           substitute (VisitMkCon res tag args) = pure $ VisitMkCon res tag !(substituteMany args)
@@ -72,6 +73,7 @@ substituteInstVisitValue subst fn = (\inst => (substitute inst) >>= fn)
           substitute (VisitCall res linImpls name args) = pure $ VisitCall res !(substLinImpls linImpls) name !(substituteMany args)
           substitute (VisitOp res linImpls primFn args) = pure $ VisitOp res !(substLinImpls linImpls) primFn !(substituteMany args)
           substitute (VisitExtprim res linImpls name args) = pure $ VisitExtprim res !(substLinImpls linImpls) name !(substituteMany args)
+          substitute (VisitStarkNetIntrinsic res linImpls intrinsic args) = pure $ VisitStarkNetIntrinsic res !(substLinImpls linImpls) intrinsic !(substituteMany args)
           substitute (VisitCase reg) = pure $ VisitCase !(subst reg)
           substitute (VisitConBranch tag) = pure $ VisitConBranch tag
           substitute (VisitConstBranch const) = pure $ VisitConstBranch const

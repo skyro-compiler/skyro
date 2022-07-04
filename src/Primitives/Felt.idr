@@ -61,7 +61,7 @@ export
     eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (a+b)
     eval _ = Nothing
 
-    generateCode = feltBinOp "+"
+    generateCode _ = feltBinOp "+"
 
 export
 [sub_felt] PrimFn where
@@ -69,7 +69,7 @@ export
     eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (a-b)
     eval _ = Nothing
 
-    generateCode = feltBinOp "-"
+    generateCode _ = feltBinOp "-"
 
 export
 [mul_felt] PrimFn where
@@ -80,7 +80,7 @@ export
     eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (a*b)
     eval _ = Nothing
 
-    generateCode = feltBinOp "*"
+    generateCode _ = feltBinOp "*"
 
 export
 [div_felt] PrimFn where
@@ -89,36 +89,36 @@ export
     eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F (feltDiv a b)
     eval _ = Nothing
 
-    generateCode = feltBinOp "/"
+    generateCode _ = feltBinOp "/"
 
 export
 [neg_felt] PrimFn where
     eval [ConstValue (F a)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (-a)
     eval _ = Nothing
 
-    generateCode r [a] _ = Raw "\{ compileRegDecl r } = -\{ compileReg a }\n"
-    generateCode _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode neg_felt"
+    generateCode _ r [a] _ = Raw "\{ compileRegDecl r } = -\{ compileReg a }\n"
+    generateCode _ _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode neg_felt"
 
 --Todo: should we even allow this (should we have shifts in general)
 export
 [shl_felt] PrimFn where
-    eval [_, ConstValue(F 0)] = Just $ ArgValue 0
+    -- eval [_, ConstValue(F 0)] = Just $ ArgValue 0
     -- Todo: Just an incorrect quick hack add real felt impl in idris2
-    eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (prim__shl_Integer (cast a) (cast b))
+    -- eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (prim__shl_Integer (cast a) (cast b))
     eval _ = Nothing
 
-    generateCode = generateMissingCodeError "shl_felt"
+    generateCode _ = generateMissingCodeError "shl_felt" genRuntimeNote
 
 
 --Todo: should we even allow this (should we have shifts in general)
 export
 [shr_felt] PrimFn where
-    eval [_, ConstValue(F 0)] = Just $ ArgValue 0
+    -- eval [_, ConstValue(F 0)] = Just $ ArgValue 0
     -- Todo: Just an incorrect quick hack add real felt impl in idris2
-    eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (prim__shr_Integer (cast a) (cast b))
+    -- eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (prim__shr_Integer (cast a) (cast b))
     eval _ = Nothing
 
-    generateCode = generateMissingCodeError "shr_felt"
+    generateCode _ = generateMissingCodeError "shr_felt" genRuntimeNote
 
 -- Duplicate of UInt.and_uintX_code
 and_felt_code : CairoReg -> CairoReg -> CairoReg -> CairoReg -> CairoReg -> String
@@ -132,14 +132,14 @@ and_felt_code r bitwise_ptr_in bitwise_ptr_out x y = """
 export
 [and_felt] PrimFn where
     -- Todo: Just an incorrect quick hack add real felt impl in idris2
-    eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (prim__and_Integer (cast a) (cast b))
+    -- eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (prim__and_Integer (cast a) (cast b))
     eval _ = Nothing
 
-    generateCode res [a,b] implicits = 
-        case lookup bitwise_builtin implicits of
-            Just (bw_in, bw_out) => Raw $ and_felt_code res bw_in bw_out a b
-            Nothing => assert_total $ idris_crash "bitwise_ptr not found"
-    generateCode _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode and_felt"
+    -- generateCode res [a,b] implicits =
+    --    case lookup bitwise_builtin implicits of
+    --        Just (bw_in, bw_out) => Raw $ and_felt_code res bw_in bw_out a b
+    --        Nothing => assert_total $ idris_crash "bitwise_ptr not found"
+    generateCode _ = generateMissingCodeError "and_felt" genRuntimeNote
 
 
 -- Duplicate of UInt.or_uintX_code
@@ -155,14 +155,14 @@ or_felt_code r bitwise_ptr_in bitwise_ptr_out x y = """
 export
 [or_felt] PrimFn where
     -- Todo: Just an incorrect quick hack add real felt impl in idris2
-    eval [ConstValue (F a),ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (prim__or_Integer (cast a) (cast b))
+    -- eval [ConstValue (F a),ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (prim__or_Integer (cast a) (cast b))
     eval _ = Nothing
 
-    generateCode res [a,b] implicits = 
-        case lookup bitwise_builtin implicits of
-                Just (bw_in, bw_out) => Raw $ or_felt_code res bw_in bw_out a b
-                Nothing => assert_total $ idris_crash "bitwise_ptr not found"
-    generateCode _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode or_felt_code"
+    -- generateCode res [a,b] implicits =
+    --   case lookup bitwise_builtin implicits of
+    --          Just (bw_in, bw_out) => Raw $ or_felt_code res bw_in bw_out a b
+    --          Nothing => assert_total $ idris_crash "bitwise_ptr not found"
+    generateCode _ = generateMissingCodeError "or_felt" genRuntimeNote
 
 
 -- Duplicate of UInt.xor_uintX_code
@@ -178,41 +178,24 @@ xor_felt_code r bitwise_ptr_in bitwise_ptr_out x y = """
 export
 [xor_felt] PrimFn where
     -- Todo: Just an incorrect quick hack add real felt impl in idris2
-    eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (prim__xor_Integer (cast a) (cast b))
+    -- eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ F $ integerToFelt (prim__xor_Integer (cast a) (cast b))
     eval _ = Nothing
 
-    generateCode res [a,b] implicits = 
-        case lookup bitwise_builtin implicits of
-                Just (bw_in, bw_out) => Raw $ xor_felt_code res bw_in bw_out a b
-                Nothing => assert_total $ idris_crash "bitwise_ptr not found"
-    generateCode _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode xor_felt"
+    -- generateCode res [a,b] implicits =
+    --    case lookup bitwise_builtin implicits of
+    --          Just (bw_in, bw_out) => Raw $ xor_felt_code res bw_in bw_out a b
+    --          Nothing => assert_total $ idris_crash "bitwise_ptr not found"
+    generateCode _ = generateMissingCodeError "xor_felt" genRuntimeNote
 
 
 ---------------------------------------------------------------------------------------------------
 -- Felt LT
 ---------------------------------------------------------------------------------------------------
 lt_felt_name : Name
-lt_felt_name = makeBuiltinName "is_lt_felt"
+lt_felt_name = makeBuiltinName "lt_felt"
 
-lt_felt_code : String
-lt_felt_code = """
-# Checks if the unsigned integer lift (as a number in the range [0, PRIME)) of a is lower than
-# that of b.
-# See split_felt() for more details.
-# Returns 1 if true, 0 otherwise.
-func \{cairoName lt_felt_name}(range_check_ptr,a, b) -> (res, range_check_ptr):
-    %{ memory[ap] = 0 if (ids.a % PRIME) < (ids.b % PRIME) else 1 %}
-    jmp not_lt if [ap] != 0; ap++
-    assert_lt_felt{range_check_ptr=range_check_ptr}(a, b)
-    return (1, range_check_ptr)
-
-    not_lt:
-    assert_le_felt{range_check_ptr=range_check_ptr}(b, a)
-    return (0, range_check_ptr)
-end
-
-"""
-
+lt_felt_import : Import
+lt_felt_import = MkImport "skyro.felt" "felt_lt" (Just "lt_felt")
 
 export
 [lt_felt] PrimFn where
@@ -221,53 +204,28 @@ export
     eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ toInt (a<b)
     eval _ = Nothing
 
-    imports = fromList [
-        MkImport "starkware.cairo.common.math_cmp" "assert_lt_felt",
-        MkImport "starkware.cairo.common.math_cmp" "assert_le_felt"]
+    imports = fromList [lt_felt_import]
     implicits = singleton range_check_builtin
-    dependencies = fromList [(lt_felt_name, ForeignDef (MkForeignInfo True Nothing [range_check_builtin] empty lt_felt_code) 2 1)]
-    generateCode res args implicits = Instructions [CALL [res] implicits lt_felt_name args]
+    generateCode _ res args implicits = Instructions [CALL [res] implicits lt_felt_name args]
 
 ---------------------------------------------------------------------------------------------------
 -- Felt LTE
 ---------------------------------------------------------------------------------------------------
 lte_felt_name : Name
-lte_felt_name = makeBuiltinName "is_lte_felt"
+lte_felt_name = makeBuiltinName "lte_felt"
 
-lte_felt_code : String
-lte_felt_code = """
-    # Checks if the unsigned integer lift (as a number in the range [0, PRIME)) of a is lower than
-    # or equal to that of b.
-    # See split_felt() for more details.
-    # Returns 1 if true, 0 otherwise.
-    func \{cairoName lte_felt_name}(range_check_ptr, a, b) -> (res, range_check_ptr):
-        %{ memory[ap] = 0 if (ids.a % PRIME) <= (ids.b % PRIME) else 1 %}
-        jmp not_le if [ap] != 0; ap++
-        assert_le_felt{range_check_ptr=range_check_ptr}(a, b)
-        return (1, range_check_ptr)
-
-        not_le:
-        assert_lt_felt{range_check_ptr=range_check_ptr}(b, a)
-        return (0, range_check_ptr)
-    end
-
-"""
+lte_felt_import : Import
+lte_felt_import = MkImport "skyro.felt" "felt_lte" (Just "lte_felt")
 
 export
 [lte_felt] PrimFn where
     apStable = False
-
-    -- Todo: Just an incorrect quick hack add real felt impl in idris2
     eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ toInt (a<=b)
     eval _ = Nothing
 
-    imports = fromList [
-        MkImport "starkware.cairo.common.math_cmp" "assert_lt_felt",
-        MkImport "starkware.cairo.common.math_cmp" "assert_le_felt"]
+    imports = fromList [lte_felt_import]
     implicits = singleton range_check_builtin
-    dependencies = fromList [(lte_felt_name, ForeignDef (MkForeignInfo True Nothing [range_check_builtin] empty lte_felt_code) 2 1)]
-    generateCode res args implicits = Instructions [CALL [res] implicits lte_felt_name args]
-
+    generateCode _ res args implicits = Instructions [CALL [res] implicits lte_felt_name args]
 
 ---------------------------------------------------------------------------------------------------
 -- Felt EQ
@@ -277,7 +235,7 @@ export
     eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ toInt (a==b)
     eval _ = Nothing
 
-    generateCode r a i = Raw $ compileEqOp "eq_felt" r a i
+    generateCode _ r a i = Raw $ compileEqOp "eq_felt" r a i
 
 ---------------------------------------------------------------------------------------------------
 -- Felt GTE 
@@ -286,18 +244,12 @@ export
 export
 [gte_felt] PrimFn where
     apStable = False
-
-    -- Todo: Just an incorrect quick hack add real felt impl in idris2
     eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ toInt (a>=b)
     eval _ = Nothing
 
-    imports = fromList [
-        MkImport "starkware.cairo.common.math_cmp" "assert_lt_felt",
-        MkImport "starkware.cairo.common.math_cmp" "assert_le_felt"]
+    imports = fromList [lte_felt_import]
     implicits = singleton range_check_builtin
-    dependencies = fromList [(lte_felt_name, ForeignDef (MkForeignInfo True Nothing [range_check_builtin] empty lte_felt_code) 2 1)]
-    generateCode res [a,b] implicits = Instructions [CALL [res] implicits lte_felt_name [b,a]] -- Flipped arguments
-    generateCode _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode gte_felt"
+    generateCode _ res args implicits = Instructions [CALL [res] implicits lte_felt_name (reverse args)]
 
 
 ---------------------------------------------------------------------------------------------------
@@ -307,24 +259,17 @@ export
 export
 [gt_felt] PrimFn where
     apStable = False
-
-    -- Todo: Just an incorrect quick hack add real felt impl in idris2
     eval [ConstValue (F a), ConstValue (F b)] = Just $ NewValue $ ConstValue $ toInt (a>b)
     eval _ = Nothing
 
-    imports = fromList [
-        MkImport "starkware.cairo.common.math_cmp" "assert_lt_felt",
-        MkImport "starkware.cairo.common.math_cmp" "assert_le_felt"]
+    imports = fromList [lt_felt_import]
     implicits = singleton range_check_builtin
-    dependencies = fromList [(lt_felt_name, ForeignDef (MkForeignInfo True Nothing [range_check_builtin] empty lt_felt_code) 2 1)]
-    generateCode res [a,b] implicits = Instructions [CALL [res] implicits lt_felt_name [b,a]] -- Flipped arguments
-    generateCode _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode gt_felt"
+    generateCode _ res args implicits = Instructions [CALL [res] implicits lt_felt_name (reverse args)]
 
--- Todo: How to treat Integers which are larger or smaller than Felt
 export
 [cast_to_felt] PrimFn where
     eval [ConstValue c] = map (\i => NewValue $ ConstValue $ F $ integerToFelt i) (constToInteger c)
     eval _ = Nothing
 
-    generateCode r [a] _ = Raw "\{ compileRegDecl r } = \{ compileReg a } #Cast to felt\n"
-    generateCode _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode cast_to_felt"
+    generateCode _ r [a] _ = Raw "\{ compileRegDecl r } = \{ compileReg a } #Cast to felt\n"
+    generateCode _ _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode cast_to_felt"

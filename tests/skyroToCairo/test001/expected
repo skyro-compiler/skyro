@@ -1,0 +1,8 @@
+
+Compiling Skyro in Cairo mode
+Input file: Main.skyro, Output file ./build/Main.cairo_unformatted, Verbosity: False
+
+Compilation complete!
+Program output:
+  5
+

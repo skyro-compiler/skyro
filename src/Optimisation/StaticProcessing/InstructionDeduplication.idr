@@ -8,6 +8,7 @@ import Data.SortedMap
 import CairoCode.Traversal.Base
 import CairoCode.Traversal.Composition
 import Utils.Lens
+import CommonDef
 
 
 -- This helps to deduplicate instructions representing the same operation with the same arguments
@@ -28,6 +29,7 @@ data InstInput: Type where
      Call : Name -> List CairoReg -> InstInput
      Op : CairoPrimFn -> List CairoReg -> InstInput
      Extprim : Name -> List CairoReg -> InstInput
+     Intrinsic : StarkNetIntrinsic -> List CairoReg -> InstInput
      Project : Nat -> CairoReg -> InstInput
 
 public export
@@ -38,6 +40,7 @@ Eq InstInput where
   (==) (Call n1 a1) (Call n2 a2) = n1 == n2 && a1 == a2
   (==) (Op f1 a1) (Op f2 a2) = f1 == f2 && a1 == a2
   (==) (Extprim n1 a1) (Extprim n2 a2) = n1 == n2 && a1 == a2
+  (==) (Intrinsic i1 a1) (Intrinsic i2 a2) = i1 == i2 && a1 == a2
   (==) (Project p1 a1) (Project p2 a2) = p1 == p2 && a1 == a2
   (==) _ _  = False
 
@@ -49,6 +52,7 @@ Ord InstInput where
   compare (Call n1 a1) (Call n2 a2) = thenCompare (compare n1 n2) (compare a1 a2)
   compare (Op f1 a1) (Op f2 a2) = thenCompare (compare f1 f2) (compare a1 a2)
   compare (Extprim n1 a1) (Extprim n2 a2) = thenCompare (compare n1 n2) (compare a1 a2)
+  compare (Intrinsic i1 a1) (Intrinsic i2 a2) = thenCompare (compare i1 i2) (compare a1 a2)
   compare (Project p1 a1) (Project p2 a2)  = thenCompare (compare p1 p2) (compare a1 a2)
   compare a b = compare (dataOrder a) (dataOrder b)
     where dataOrder : InstInput -> Int
@@ -58,7 +62,8 @@ Ord InstInput where
           dataOrder (Call _ _) = 3
           dataOrder (Op _ _) = 4
           dataOrder (Extprim _ _) = 5
-          dataOrder (Project _ _) = 6
+          dataOrder (Intrinsic _ _) = 6
+          dataOrder (Project _ _) = 7
 
 inputFromVisit : InstVisit CairoReg -> Maybe (List CairoReg, InstInput)
 inputFromVisit (VisitMkCon res tag args) = Just ([res], Construct tag args)
@@ -67,6 +72,7 @@ inputFromVisit (VisitApply res _ f a) = Just ([res], Apply f a)
 inputFromVisit (VisitCall res _ name args) = Just (res, Call name args)
 inputFromVisit (VisitOp res _ fn args) =  Just ([res], Op fn args)
 inputFromVisit (VisitExtprim res _ name args) = Just (res, Extprim name args)
+inputFromVisit (VisitStarkNetIntrinsic res _ intr args) = Just ([res], Intrinsic intr args)
 inputFromVisit (VisitProject res arg pos) = Just ([res], Project pos arg)
 inputFromVisit _ = Nothing
 

@@ -2,10 +2,12 @@ module Primitives.Common
 
 import Core.Context
 import CairoCode.CairoCode
+import CairoCode.CairoCodeUtils
 import CommonDef
 import Data.SortedSet
 import Data.SortedMap
 import CodeGen.CodeGenHelper
+import Debug.Trace
 
 
 -- This is a separate module to avoid cyclic dependencies
@@ -40,19 +42,40 @@ interface PrimFn where
 
     eval: List ValueInfo -> Maybe EvalRes
 
-    dependencies : SortedMap Name (Lazy CairoDef)
-    dependencies = empty
+    generateCode : String -> (res:CairoReg) -> (args:List CairoReg) -> LinearImplicitArgs -> PrimFnCode
 
-    generateCode : (res:CairoReg) -> (args:List CairoReg) -> LinearImplicitArgs -> PrimFnCode
-
+public export
+interface ConstReg where
+    -- Some things are hard to implement for these so unless needed do not do them
+    -- this always need to be apStable for now
+    -- apStable : Bool
+    -- this are not allowed to have implicits for now
+    -- implicits : SortedSet LinearImplicit
+    -- there are not allowed to have imports for now (this may be the most likely to be needed)
+    -- imports : SortedSet Import
+    manifestConstantReg : String -> CairoReg -> (Maybe String, CairoReg)
+    assignConstantReg : CairoReg -> CairoConst -> String
+    -- default is no manifest is needed, reg can be used directly inline
+    manifestConstantReg _ r@(Const c) = (Nothing,r)
+    manifestConstantReg _ r = assert_total $ idris_crash $ "Not a constant: " ++ (show r)
+    -- default is const can simply be assigned
+    assignConstantReg  r c =
+        if (isLocal r) then "\{ compileRegDeclDirect r } = \{ compileConst c }\n"
+        else if (isConst r) then  ""
+        else compileConstRegDecl r ++ " = \{ compileConst c }\n"
 
 export
 makeBuiltinName : String -> Name
-makeBuiltinName fnName = makeName "Builtin" fnName
+makeBuiltinName fnName = (UN $ Basic fnName)
+
+export
+genRuntimeNote : Maybe (String -> (res:CairoReg) -> (args:List CairoReg) -> LinearImplicitArgs -> PrimFnCode)
+genRuntimeNote = Just (\n,r,_,_ => Raw ("#Error: Missing primop: " ++ n ++ " - target: " ++ show r ++ "\n"))
 
 export 
-generateMissingCodeError : String -> a
-generateMissingCodeError name = assert_total $ idris_crash $ "Missing primop: " ++ name
+generateMissingCodeError : String -> Maybe (String -> a) -> a
+generateMissingCodeError name (Just fallback) = trace ("Missing primop: " ++ name) (fallback name)
+generateMissingCodeError name _ = assert_total $ idris_crash $ "Missing primop: " ++ name
 
 export 
 pow2 : Nat -> Integer
@@ -64,11 +87,9 @@ toInt : Bool -> CairoConst
 toInt True = I 1
 toInt False = I 0
 
-
 export
 bitwiseBuiltinImport : Import
-bitwiseBuiltinImport = MkImport "starkware.cairo.common.cairo_builtins" "BitwiseBuiltin"
-
+bitwiseBuiltinImport = MkImport "starkware.cairo.common.cairo_builtins" "BitwiseBuiltin" Nothing
 
 -- This currently is ugly for things like if a == b then ... as it gens two ifs
 --  But while eliminating it would be possible its not worth the trouble yet

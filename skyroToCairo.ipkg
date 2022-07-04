@@ -1,0 +1,59 @@
+package skyroToCairo
+
+-- `sourcedir`
+-- The `./HelloIdris2` dir is in the root of the repo, so this is `"./"`
+-- If you were to move that to `"./src/` then you'd update this field
+sourcedir = "./src/"
+
+-- `depends`
+-- This is a comma separated list of deps, eg: `depends = base, contrib`
+depends = idris2, base, contrib, network
+
+-- `modules`
+-- This is a comma separated list of the modules you'll want to export
+-- to the final artifact
+modules =
+    MainIR,
+    CommonDef,
+    Primitives.Primitives,
+    Primitives.Felt,
+    CairoCode.CairoCode,
+    CairoCode.CairoCodeSerializer,
+    CairoCode.CairoCodeLexer,
+    CairoCode.CairoCodeParser,
+    CairoCode.CairoCodeUtils,
+    CairoCode.Traversal.Base,
+    CairoCode.Traversal.Composition,
+    CairoCode.Traversal.Defaults,
+    CairoCode.Traversal.ValueTracker,
+    ABI.Definitions,
+    ABI.Generator,
+    CodeGen.CodeGen,
+    CodeGen.CodeGenHelper,
+    CodeGen.InjectLinearImplicits,
+    CodeGen.RegAllocator,
+    Optimisation.StaticProcessing.StaticTracker,
+    Optimisation.StaticProcessing.InstructionDeduplication,
+    Optimisation.StaticProcessing.StaticTransformer,
+    Optimisation.StaticProcessing.IterativeBaseTransformer,
+    Optimisation.DeadCodeElimination,
+    Optimisation.Untupling,
+    Optimisation.DeadArgumentEliminator,
+    Optimisation.GlobalStaticOptimizer,
+    Optimisation.Inliner,
+    Optimisation.OrderAndEliminateDefinitions,
+    Primitives.Externals,
+    Primitives.Felt,
+    Primitives.Primitives,
+    RewriteRules.EqChainInline,
+    Utils.Helpers,
+    Utils.Lens
+
+
+-- `main`
+-- the entrypoint for the main function for the executable
+main = MainIR
+
+-- `executable`
+-- the name of the executable in the `./build/exec/` dir
+executable = skyroToCairo

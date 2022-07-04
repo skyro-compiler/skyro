@@ -14,8 +14,9 @@ import Optimisation.StaticProcessing.StaticTransformer
 %hide Prelude.toList
 
 export
-globalStaticOptimize : Name -> List (Name, CairoDef) -> List (Name, CairoDef)
-globalStaticOptimize = iterativeCallTransform (mkRegisterGen "global_optim") noTransform (\id => id)
-
+globalStaticOptimize : List (Name, CairoDef) -> List (Name, CairoDef)
+globalStaticOptimize = iterativeCallTransform @{config} ()
+    where [config] IterativeTransformerConf () where
+    -- we use all default impls --
 
 

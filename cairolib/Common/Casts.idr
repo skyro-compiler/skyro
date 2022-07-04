@@ -18,6 +18,9 @@ public export %inline Cast Int32 Felt where cast = prim__cast_Int32_to_Felt
 %extern prim__cast_Int64_to_Felt : Int64 -> Felt
 public export %inline Cast Int64 Felt where cast = prim__cast_Int64_to_Felt
 
+%extern prim__cast_Integer_to_Felt : Integer -> Felt
+public export %inline Cast Integer Felt where cast = prim__cast_Integer_to_Felt
+
 %extern prim__cast_Bits8_to_Felt : Bits8 -> Felt
 public export %inline Cast Bits8 Felt where cast = prim__cast_Bits8_to_Felt
 
@@ -46,6 +49,9 @@ public export %inline Cast Int32 Int where cast = prim__cast_Int32_to_Int
 
 %extern prim__cast_Int64_to_Int : Int64 -> Int
 public export %inline Cast Int64 Int where cast = prim__cast_Int64_to_Int
+
+%extern prim__cast_Integer_to_Int : Integer -> Int
+public export %inline Cast Integer Int where cast = prim__cast_Integer_to_Int
 
 %extern prim__cast_Bits8_to_Int : Bits8 -> Int
 public export %inline Cast Bits8 Int where cast = prim__cast_Bits8_to_Int
@@ -76,6 +82,9 @@ public export %inline Cast Int32 Int8 where cast = prim__cast_Int32_to_Int8
 %extern prim__cast_Int64_to_Int8 : Int64 -> Int8
 public export %inline Cast Int64 Int8 where cast = prim__cast_Int64_to_Int8
 
+%extern prim__cast_Integer_to_Int8 : Integer -> Int8
+public export %inline Cast Integer Int8 where cast = prim__cast_Integer_to_Int8
+
 %extern prim__cast_Bits8_to_Int8 : Bits8 -> Int8
 public export %inline Cast Bits8 Int8 where cast = prim__cast_Bits8_to_Int8
 
@@ -104,6 +113,9 @@ public export %inline Cast Int32 Int16 where cast = prim__cast_Int32_to_Int16
 
 %extern prim__cast_Int64_to_Int16 : Int64 -> Int16
 public export %inline Cast Int64 Int16  where cast = prim__cast_Int64_to_Int16
+
+%extern prim__cast_Integer_to_Int16 : Integer -> Int16
+public export %inline Cast Integer Int16  where cast = prim__cast_Integer_to_Int16
 
 %extern prim__cast_Bits8_to_Int16 : Bits8 -> Int16
 public export %inline Cast Bits8 Int16 where cast = prim__cast_Bits8_to_Int16
@@ -134,6 +146,9 @@ public export %inline Cast Int16 Int32 where cast = prim__cast_Int16_to_Int32
 %extern prim__cast_Int64_to_Int32 : Int64 -> Int32
 public export %inline Cast Int64 Int32 where cast = prim__cast_Int64_to_Int32
 
+%extern prim__cast_Integer_to_Int32 : Integer -> Int32
+public export %inline Cast Integer Int32 where cast = prim__cast_Integer_to_Int32
+
 %extern prim__cast_Bits8_to_Int32 : Bits8 -> Int32
 public export %inline Cast Bits8 Int32 where cast = prim__cast_Bits8_to_Int32
 
@@ -163,6 +178,9 @@ public export %inline Cast Int16 Int64 where cast = prim__cast_Int16_to_Int64
 %extern prim__cast_Int32_to_Int64 : Int32 -> Int64
 public export %inline Cast Int32 Int64 where cast = prim__cast_Int32_to_Int64
 
+%extern prim__cast_Integer_to_Int64 : Integer -> Int64
+public export %inline Cast Integer Int64 where cast = prim__cast_Integer_to_Int64
+
 %extern prim__cast_Bits8_to_Int64 : Bits8 -> Int64
 public export %inline Cast Bits8 Int64 where cast = prim__cast_Bits8_to_Int64
 
@@ -176,6 +194,39 @@ public export %inline Cast Bits32 Int64 where cast = prim__cast_Bits32_to_Int64
 public export %inline Cast Bits64 Int64 where cast = prim__cast_Bits64_to_Int64
 
 
+-- Casts to Integer
+%extern prim__cast_Felt_to_Integer : Felt -> Integer
+public export %inline Cast Felt Integer where cast = prim__cast_Felt_to_Integer
+
+%extern prim__cast_Int_to_Integer : Int -> Integer
+public export %inline Cast Int Integer where cast = prim__cast_Int_to_Integer
+
+%extern prim__cast_Int8_to_Integer : Int8 -> Integer
+public export %inline Cast Int8 Integer where cast = prim__cast_Int8_to_Integer
+
+%extern prim__cast_Int16_to_Integer : Int16 -> Integer
+public export %inline Cast Int16 Integer where cast = prim__cast_Int16_to_Integer
+
+%extern prim__cast_Int32_to_Integer : Int32 -> Integer
+public export %inline Cast Int32 Integer where cast = prim__cast_Int32_to_Integer
+
+%extern prim__cast_Int64_to_Integer : Int64 -> Integer
+public export %inline Cast Int64 Integer where cast = prim__cast_Int64_to_Integer
+
+%extern prim__cast_Integer_to_Integer : Integer -> Integer
+public export %inline Cast Integer Integer where cast = prim__cast_Integer_to_Integer
+
+%extern prim__cast_Bits8_to_Integer : Bits8 -> Integer
+public export %inline Cast Bits8 Integer where cast = prim__cast_Bits8_to_Integer
+
+%extern prim__cast_Bits16_to_Integer : Bits16 -> Integer
+public export %inline Cast Bits16 Integer where cast = prim__cast_Bits16_to_Integer
+
+%extern prim__cast_Bits32_to_Integer : Bits32 -> Integer
+public export %inline Cast Bits32 Integer where cast = prim__cast_Bits32_to_Integer
+
+%extern prim__cast_Bits64_to_Integer : Bits64 -> Integer
+public export %inline Cast Bits64 Integer where cast = prim__cast_Bits64_to_Integer
 
 -- Casts to Bits8
 %extern prim__cast_Felt_to_Bits8 : Felt -> Bits8
@@ -195,6 +246,9 @@ public export %inline Cast Int32 Bits8 where cast = prim__cast_Int32_to_Bits8
 
 %extern prim__cast_Int64_to_Bits8 : Int64 -> Bits8
 public export %inline Cast Int64 Bits8 where cast = prim__cast_Int64_to_Bits8
+
+%extern prim__cast_Integer_to_Bits8 : Integer -> Bits8
+public export %inline Cast Integer Bits8 where cast = prim__cast_Integer_to_Bits8
 
 %extern prim__cast_Bits16_to_Bits8 : Bits16 -> Bits8
 public export %inline Cast Bits16 Bits8 where cast = prim__cast_Bits16_to_Bits8
@@ -224,6 +278,9 @@ public export %inline Cast Int32 Bits16 where cast = prim__cast_Int32_to_Bits16
 %extern prim__cast_Int64_to_Bits16 : Int64 -> Bits16
 public export %inline Cast Int64 Bits16 where cast = prim__cast_Int64_to_Bits16
 
+%extern prim__cast_Integer_to_Bits16 : Integer -> Bits16
+public export %inline Cast Integer Bits16 where cast = prim__cast_Integer_to_Bits16
+
 %extern prim__cast_Bits8_to_Bits16 : Bits8 -> Bits16
 public export %inline Cast Bits8 Bits16 where cast = prim__cast_Bits8_to_Bits16
 
@@ -252,6 +309,9 @@ public export %inline Cast Int32 Bits32 where cast = prim__cast_Int32_to_Bits32
 %extern prim__cast_Int64_to_Bits32 : Int64 -> Bits32
 public export %inline Cast Int64 Bits32 where cast = prim__cast_Int64_to_Bits32
 
+%extern prim__cast_Integer_to_Bits32 : Integer -> Bits32
+public export %inline Cast Integer Bits32 where cast = prim__cast_Integer_to_Bits32
+
 %extern prim__cast_Bits8_to_Bits32 : Bits8 -> Bits32
 public export %inline Cast Bits8 Bits32 where cast = prim__cast_Bits8_to_Bits32
 
@@ -279,6 +339,9 @@ public export %inline Cast Int32 Bits64 where cast = prim__cast_Int32_to_Bits64
 
 %extern prim__cast_Int64_to_Bits64 : Int64 -> Bits64
 public export %inline Cast Int64 Bits64 where cast = prim__cast_Int64_to_Bits64
+
+%extern prim__cast_Integer_to_Bits64 : Integer -> Bits64
+public export %inline Cast Integer Bits64 where cast = prim__cast_Integer_to_Bits64
 
 %extern prim__cast_Bits8_to_Bits64 : Bits8 -> Bits64
 public export %inline Cast Bits8 Bits64 where cast = prim__cast_Bits8_to_Bits64

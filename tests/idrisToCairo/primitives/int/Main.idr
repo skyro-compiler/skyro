@@ -7,6 +7,16 @@ import Data.Bits
 -- evaluates the expressions at compile time.
 -- Maybe we should disable the constantfolder and write the tests more direct.
 
+
+%foreign
+  """
+  code:
+  func Main_f_3() -> (r):
+      return (3)
+  end
+  """
+f_3 : Felt
+
 %foreign 
   """
   code:
@@ -25,6 +35,9 @@ f_100 : Felt
   """
 f_50 : Felt
 
+i8_3 : Int8
+i8_3 = cast {to=Int8} f_3
+
 i8_100 : Int8
 i8_100 = cast {to=Int8} f_100
 
@@ -38,6 +51,19 @@ out = output . cast
 %noinline
 main : Cairo ()
 main = do
+
+  out $ assert_total $ i8_3 `div` (the Int8 2)
+  out $ assert_total $ i8_3 `mod` (the Int8 2)
+
+  out $ assert_total $ (-i8_3) `div` (the Int8 (-2))
+  out $ assert_total $ (-i8_3) `mod` (the Int8 (-2))
+
+  out $ assert_total $ (-i8_3) `div` (the Int8 2)
+  out $ assert_total $ (-i8_3) `mod` (the Int8 2)
+
+  out $ assert_total $ i8_3 `div` (the Int8 (-2))
+  out $ assert_total $ i8_3 `mod` (the Int8 (-2))
+
   out $ i8_100 + i8_50 
   out $ i8_100 - i8_50
   out $ i8_100 * i8_50
@@ -51,10 +77,10 @@ main = do
   out $ i8_100 .&. i8_50
   out $ i8_100 .|. i8_50 
   out $ i8_100 `xor` i8_50
+  out $ i8_50 `shiftL` 1 -- Index is of type Nat. Not implemented yet
+  out $ i8_100 `shiftR` 1
   out $ i8_100 < i8_50
   out $ i8_100 <= i8_50
   out $ i8_100 == i8_50
   out $ i8_100 >= i8_50
   out $ i8_100 > i8_50
-  -- out $ i8_50 `shiftL` 1 -- Index is of type Nat. Not implemented yet
-  -- out $ i8_100 `shiftR` 1

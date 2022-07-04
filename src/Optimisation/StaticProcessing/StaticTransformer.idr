@@ -26,6 +26,7 @@ record LocalStaticOptimState where
     dedupState : TrackerState
     bindings : ScopedBindings StaticInfo
     elimDepth : Int
+    regGen : RegisterGen
 
 -- Lenses for leaner and more readable main definitions
 dedupStateLens : Lens LocalStaticOptimState TrackerState
@@ -37,9 +38,44 @@ elimDepthLens = MkLens elimDepth (\ts,fn => {elimDepth $= fn} ts)
 bindingsLens : Lens LocalStaticOptimState (ScopedBindings StaticInfo)
 bindingsLens = MkLens bindings (\ts,fn => {bindings $= fn} ts)
 
-inlineError : List StaticInfo -> List CairoReg -> Lazy (List (InstVisit CairoReg)) -> Traversal LocalStaticOptimState (List (InstVisit CairoReg))
-inlineError args res noErrorTrav = if isCons errors
-    then pure $ map (\r => VisitError r consolidateErrors) res
+regGenLens : Lens LocalStaticOptimState RegisterGen
+regGenLens = MkLens regGen (\ts,fn => {regGen $= fn} ts)
+
+initRegGen : Traversal LocalStaticOptimState RegisterGen
+initRegGen = do
+    regGen <- readStateL regGenLens
+    let (regGen1, regGen2) = splitRegisterGen regGen
+    writeStateL regGenLens regGen2
+    pure regGen1
+
+isElim : CairoReg -> Bool
+isElim (Eliminated _) = True
+isElim _ = False
+
+isAddressable : CairoReg -> Bool
+isAddressable (Eliminated (Replacement c)) = isAddressable c
+isAddressable (Eliminated Null) = True
+isAddressable c@(Eliminated _) = False -- trace ("not addressable: "++(show c))
+isAddressable _ = True
+
+
+-- Because of assigns, repackings etc.. we may end up with multiple registers storing the same value
+--  This function chooses one. It tries to choose the one least likely to be eliminated (or one that does not cost Insts if not eliminated)
+-- Note: This assumes that list is sorted according to lifetime (which is default for CairoReg in CairoCode)
+chooseBestReg : List CairoReg -> CairoReg
+chooseBestReg (x::xs) = x
+chooseBestReg Nil = Eliminated (Other "Missed Lookup")
+
+export
+resolveInfToReg : StaticInfo -> CairoReg
+resolveInfToReg inf = result $ extractSingleConstant inf
+    where result : Maybe CairoConst -> CairoReg
+          result Nothing = chooseBestReg (toList (inf.sources))
+          result (Just c) = Const c
+
+inlineError : List StaticInfo -> List CairoReg -> SortedMap LinearImplicit (StaticInfo, CairoReg) -> Lazy (List (InstVisit CairoReg)) -> Traversal LocalStaticOptimState (List (InstVisit CairoReg))
+inlineError args res impls noErrorTrav = if isCons errors
+    then pure $ (map (\r => VisitError r consolidateErrors) res ) ++ implAssigns
     else pure noErrorTrav
     where extractError : StaticInfo -> List String
           extractError (MKStaticInfo _ (Error err)) = [err]
@@ -48,27 +84,16 @@ inlineError args res noErrorTrav = if isCons errors
           errors = args >>= extractError
           consolidateErrors : String
           consolidateErrors = foldl (\acc,err => acc ++ " " ++ err) "" errors
+          implAssigns : List (InstVisit CairoReg)
+          implAssigns = map (\(src,trg) => VisitAssign trg (resolveInfToReg src)) (values impls)
 
--- Because of assigns, repackings etc.. we may end up with multiple registers storing the same value
---  This function chooses one. It tries to choose the one least likely to be eliminated (or one that does not cost Insts if not eliminated)
--- Note: This assumes that list is sorted according to lifetime (which is default for CairoReg in CairoCode)
-chooseBestReg : List CairoReg -> CairoReg
-chooseBestReg (x::Nil) = x -- This is the case most likely to happen (only one candidate)
--- Note: If sort changes implement this differently (that is  why we treated this case seperately)
-chooseBestReg (x::xs) = x
--- Note: This case is only used in Projection, everywhere else this would mean a mistake in the tracker
-chooseBestReg Nil = Eliminated
-
-export
-resolveInfToReg : StaticInfo -> CairoReg
-resolveInfToReg inf = result $ extractSingleConstant inf
-    where result : Maybe CairoConst -> CairoReg
-          result Nothing = chooseBestReg $ toList (inf.sources)
-          result (Just c) = Const c
+-- todo: do we need some depth info? or is this handled by merger
+isUnAccessible : StaticInfo -> Bool
+isUnAccessible inf = not $ isAddressable (resolveInfToReg inf)
 
 manifestRegister : CairoReg -> CairoReg -> InstVisit CairoReg
 manifestRegister res (Const c) = VisitMkConstant res c
-manifestRegister res Eliminated = VisitError res "CanNotManifestEliminatedRegister"
+manifestRegister res (Eliminated _) = VisitError res "CanNotManifestEliminatedRegister"
 manifestRegister res reg = VisitAssign res reg
 
 manifestConstant : CairoReg -> Maybe CairoConst -> InstVisit CairoReg
@@ -81,7 +106,7 @@ canManifestEvalRes (NewValue val) = isJust $ extractSingleConstant $ fromValueIn
 canManifestEvalRes (ArgValue _) = True
 
 manifestEvalRes : CairoReg -> EvalRes -> List StaticInfo -> InstVisit CairoReg
-manifestEvalRes reg (Failure s) _ = VisitError reg "UndefinedPrimitiveOperation"
+manifestEvalRes reg (Failure s) _ = VisitError reg ("UndefinedPrimitiveOperation: " ++ s)
 manifestEvalRes reg (NewValue val) _ = (manifestConstant reg) $ extractSingleConstant $ fromValueInfo val
 manifestEvalRes reg (ArgValue Z) (x::xs) = VisitAssign reg (resolveInfToReg x)
 manifestEvalRes reg (ArgValue (S rem)) (x::xs) = manifestEvalRes reg (ArgValue rem) xs
@@ -115,6 +140,20 @@ caseBindings = composeState bindingsLens resolveCaseBinding
               Nothing => pure Nothing
               (Just (Const c)) => pure $ Just $ MKStaticInfo (singleton $ Const c) (Const $ singleton c)
               (Just reg) => getBinding reg
+
+manifestFields : RegisterGen -> CairoReg -> List StaticInfo -> Traversal LocalStaticOptimState (List (InstVisit CairoReg), List CairoReg)
+manifestFields regGen src args = pure $ manifestRec 0 (map resolveInfToReg args) (freshRegs !getDepth)
+    where freshRegs : Int -> List CairoReg
+          freshRegs d = fst $ foldl (\(acc,rg),_ => let (r,nrg) = nextRegister rg d in (r::acc,nrg)) (Nil,regGen) args
+          getDepth : Traversal LocalStaticOptimState Int
+          getDepth = pure $ extractDepth $ bindings $ !readState
+          manifestRec : Int -> (old:List CairoReg) -> (new:List CairoReg) -> (List (InstVisit CairoReg), List CairoReg)
+          manifestRec pos Nil Nil = (Nil, Nil)
+          manifestRec pos (o::os) (n::ns) = let (code, regs) = manifestRec (pos+1) os ns in if isAddressable o
+            then (code, o::regs)
+            else ((VisitProject n src (cast pos))::code, n::regs)
+          manifestRec _ _ _ = assert_total $ idris_crash "Lists had mismatching length check freshRegs"
+
 
 branchFilter : InstVisit CairoReg -> Traversal LocalStaticOptimState (Maybe (List (InstVisit CairoReg)))
 branchFilter (VisitConBranch reg) = canEliminate >>= process
@@ -153,55 +192,90 @@ constantFoldTransform : SortedMap Name CairoDef -> InstVisit StaticInfo -> Trave
 constantFoldTransform defs inst = transformer inst
     where extractLinearImplicits : CairoDef -> SortedSet LinearImplicit
           extractLinearImplicits (FunDef _ linImpls _ _) = fromList $ keys linImpls
+          extractLinearImplicits (ExtFunDef _ _ linImpls _ _) = fromList $ keys linImpls
           extractLinearImplicits (ForeignDef info _ _) = fromList $ implicits info
           implicitLookup : SortedMap Name (SortedSet LinearImplicit)
           implicitLookup = mapValueMap extractLinearImplicits defs
           transformer : InstVisit StaticInfo -> Traversal LocalStaticOptimState (List (InstVisit CairoReg))
-          transformer (VisitFunction name params impls rets) = pure [VisitFunction name params impls rets]
+          transformer (VisitFunction name tags params impls rets) = pure [VisitFunction name tags params impls rets]
           transformer (VisitForeignFunction name info args rets) = pure [VisitForeignFunction name info args rets]
-          transformer (VisitAssign res from) = inlineError [from] [res] [manifestRegister res (resolveInfToReg from)]
-          transformer (VisitMkCon res tag args) = inlineError args [res] inst
+          transformer (VisitAssign res from) = inlineError [from] [res] empty [manifestRegister res (resolveInfToReg from)]
+          transformer (VisitMkCon res tag args) = inlineError args [res] empty inst
             where repackedSrcs : List CairoReg
                   repackedSrcs = toList (findRepackedSrcs (resolveTag tag) args)
+                  repackReg : CairoReg
+                  repackReg = chooseBestReg repackedSrcs
                   inst : List (InstVisit CairoReg)
-                  inst = if isNil repackedSrcs
-                    then [VisitMkCon res tag (map resolveInfToReg args)]
-                    else [manifestRegister res (chooseBestReg repackedSrcs)]
-          transformer (VisitMkClosure res name miss args) = inlineError args [res] [VisitMkClosure res name miss (map resolveInfToReg args)]
-          transformer (VisitApply res linImpls (MKStaticInfo _ (Closure (Just (name, 1)) args)) arg) = inlineError allArgs [res] ((VisitCall [res] callLinearImplicits name (map resolveInfToReg allArgs))::implicitReassigns)
-            where allArgs : List StaticInfo
-                  allArgs = args ++ [arg]
-                  usedLinearImplicits : SortedSet LinearImplicit
-                  usedLinearImplicits = fromMaybe empty (lookup name implicitLookup)
-                  callLinearImplicits : SortedMap LinearImplicit (CairoReg, CairoReg)
-                  callLinearImplicits = resolveLinearImplicits $ fromList $ filter (\(i,_) => contains i usedLinearImplicits) (toList $ linImpls)
-                  implicitReassigns : List (InstVisit CairoReg)
-                  implicitReassigns = reassignUnusedLinearImplicits usedLinearImplicits linImpls
-          transformer (VisitApply res linImpls (MKStaticInfo _ (Closure (Just (name, (S rem))) args)) arg) = inlineError allArgs [res] ((VisitMkClosure res name rem (map resolveInfToReg allArgs))::implicitReassigns)
-            where allArgs : List StaticInfo
-                  allArgs = args ++ [arg]
-                  implicitReassigns : List (InstVisit CairoReg)
-                  implicitReassigns = reassignUnusedLinearImplicits empty linImpls
-          transformer (VisitApply res linImpls clo arg) = inlineError [clo,arg] [res] [VisitApply res (resolveLinearImplicits linImpls) (resolveInfToReg clo) (resolveInfToReg arg)]
-          transformer (VisitOp res linImpls fn args) = inlineError args [res] (result (evaluateConstantOp fn (map toValueInfo args)))
+                  inst = case repackReg of
+                    (Eliminated _) =>  [VisitMkCon res tag (map resolveInfToReg args)]
+                    rrg => [manifestRegister res rrg]
+          transformer (VisitMkClosure res name miss args) = inlineError args [res] empty [VisitMkClosure res name miss (map resolveInfToReg args)]
+          -- Todo: Keep around as fallback even if new one works now
+          -- transformer (VisitApply res linImpls clo@(MKStaticInfo _ (Closure (Just (name, 1)) args)) arg) = if any isUnAccessible args
+          --  then inlineError [clo,arg] [res] linImpls [VisitApply res (resolveLinearImplicits linImpls) (resolveInfToReg clo) (resolveInfToReg arg)]
+          --  else inlineError allArgs [res] linImpls ((VisitCall [res] callLinearImplicits name (map resolveInfToReg allArgs))::implicitReassigns)
+          --  where allArgs : List StaticInfo
+          --        allArgs = args ++ [arg]
+          --        usedLinearImplicits : SortedSet LinearImplicit
+          --        usedLinearImplicits = fromMaybe empty (lookup name implicitLookup)
+          --        callLinearImplicits : SortedMap LinearImplicit (CairoReg, CairoReg)
+          --        callLinearImplicits = resolveLinearImplicits $ fromList $ filter (\(i,_) => contains i usedLinearImplicits) (toList $ linImpls)
+          --        implicitReassigns : List (InstVisit CairoReg)
+          --        implicitReassigns = reassignUnusedLinearImplicits usedLinearImplicits linImpls
+          --transformer (VisitApply res linImpls clo@(MKStaticInfo _ (Closure (Just (name, (S rem))) args)) arg) = if any isUnAccessible args
+          --  then inlineError [clo,arg] [res] linImpls [VisitApply res (resolveLinearImplicits linImpls) (resolveInfToReg clo) (resolveInfToReg arg)]
+          --  else inlineError allArgs [res] linImpls ((VisitMkClosure res name rem (map resolveInfToReg allArgs))::implicitReassigns)
+          --  where allArgs : List StaticInfo
+          --        allArgs = args ++ [arg]
+          --        implicitReassigns : List (InstVisit CairoReg)
+          --        implicitReassigns = reassignUnusedLinearImplicits empty linImpls
+          transformer (VisitApply res linImpls clo@(MKStaticInfo _ (Closure (Just (name, 1)) args)) arg) = do
+                  regGen <- initRegGen
+                  (argRegCode, argRegs) <- manifestFields regGen srcReg args
+                  let allArgs = argRegs ++ [resolveInfToReg arg]
+                  inlineError (args ++ [arg]) [res] linImpls (argRegCode ++ ((VisitCall [res] callLinearImplicits name allArgs)::implicitReassigns))
+              where srcReg : CairoReg
+                    srcReg = resolveInfToReg clo
+                    usedLinearImplicits : SortedSet LinearImplicit
+                    usedLinearImplicits = fromMaybe empty (lookup name implicitLookup)
+                    callLinearImplicits : SortedMap LinearImplicit (CairoReg, CairoReg)
+                    callLinearImplicits = resolveLinearImplicits $ fromList $ filter (\(i,_) => contains i usedLinearImplicits) (toList $ linImpls)
+                    implicitReassigns : List (InstVisit CairoReg)
+                    implicitReassigns = reassignUnusedLinearImplicits usedLinearImplicits linImpls
+          transformer (VisitApply res linImpls clo@(MKStaticInfo _ (Closure (Just (name, (S rem))) args)) arg) = do
+                  regGen <- initRegGen
+                  (argRegCode, argRegs) <- manifestFields regGen srcReg args
+                  let allArgs = argRegs ++ [resolveInfToReg arg]
+                  inlineError (args ++ [arg]) [res] linImpls (argRegCode ++ ((VisitMkClosure res name rem allArgs)::implicitReassigns))
+             where srcReg : CairoReg
+                   srcReg = resolveInfToReg clo
+                   implicitReassigns : List (InstVisit CairoReg)
+                   implicitReassigns = reassignUnusedLinearImplicits empty linImpls
+          transformer (VisitApply res linImpls clo arg) = inlineError [clo,arg] [res] linImpls [VisitApply res (resolveLinearImplicits linImpls) (resolveInfToReg clo) (resolveInfToReg arg)]
+          transformer (VisitOp res linImpls fn args) = inlineError args [res] linImpls (result (evaluateConstantOp fn (map toValueInfo args)))
                       where result : Maybe EvalRes -> List (InstVisit CairoReg)
                             result (Just nRes) = if canManifestEvalRes nRes
                               then (manifestEvalRes res nRes args)::(reassignUnusedLinearImplicits empty linImpls)
                               else [VisitOp res (resolveLinearImplicits linImpls) fn (map resolveInfToReg args)]
                             result _ = [VisitOp res (resolveLinearImplicits linImpls) fn (map resolveInfToReg args)]
-          transformer (VisitCall res linImpls name args) = inlineError args res [VisitCall res (resolveLinearImplicits linImpls) name (map resolveInfToReg args)]
-          transformer (VisitExtprim res linImpls name args) = inlineError args res (result (externalEval name (length res) (map toValueInfo args)))
+          transformer (VisitCall res linImpls name args) = inlineError args res linImpls [VisitCall res (resolveLinearImplicits linImpls) name (map resolveInfToReg args)]
+          transformer (VisitExtprim res linImpls name args) = inlineError args res linImpls (result (externalEval name (length res) (map toValueInfo args)))
             where result : Maybe (List EvalRes) -> List (InstVisit CairoReg)
                   result (Just nRes) = if all canManifestEvalRes nRes
                     then (zipWith (\reg,res => manifestEvalRes reg res args) res nRes) ++ (reassignUnusedLinearImplicits empty linImpls)
                     else [VisitExtprim res (resolveLinearImplicits linImpls) name (map resolveInfToReg args)]
                   result _ = [VisitExtprim res (resolveLinearImplicits linImpls) name (map resolveInfToReg args)]
+          transformer (VisitStarkNetIntrinsic res linImpls intr args) =  inlineError args [res] linImpls [VisitStarkNetIntrinsic res (resolveLinearImplicits linImpls) intr (map resolveInfToReg args)]
           transformer (VisitReturn res linImpls) = pure [VisitReturn (map resolveInfToReg res) (mapValueMap resolveInfToReg linImpls)]
-          transformer (VisitProject res arg@(MKStaticInfo _ (Constructed ctrs)) pos) = inlineError [arg] [res] (result (resolveInfToReg (extractField ctrs pos)))
+          transformer (VisitProject res arg@(MKStaticInfo _ (Closure _ args))  pos) = inlineError [arg] [res] empty (result (resolveInfToReg (extractArg pos args)))
             where result : CairoReg -> List (InstVisit CairoReg)
-                  result Eliminated = [VisitProject res (resolveInfToReg arg) pos]
+                  result (Eliminated _) = [VisitProject res (resolveInfToReg arg) pos]
                   result reg = [manifestRegister res reg]
-          transformer (VisitProject res arg pos) = inlineError [arg] [res] [VisitProject res (resolveInfToReg arg) pos]
+          transformer (VisitProject res arg@(MKStaticInfo _ (Constructed ctrs)) pos) = inlineError [arg] [res] empty (result (resolveInfToReg (extractField pos ctrs)))
+            where result : CairoReg -> List (InstVisit CairoReg)
+                  result (Eliminated _) = [VisitProject res (resolveInfToReg arg) pos]
+                  result reg = [manifestRegister res reg]
+          transformer (VisitProject res arg pos) = inlineError [arg] [res] empty [VisitProject res (resolveInfToReg arg) pos]
           transformer (VisitCase reg) = pure [VisitCase (resolveInfToReg reg)]
           -- Untouched ones
           transformer VisitCaseEnd = pure $ [VisitCaseEnd]
@@ -237,26 +311,32 @@ instructionDeduplication : Removes duplicated instructions (same regs as inputs)
 constantFoldTransform : Simplifies instruction based on static input
 -}
 export
-localStaticOptimizeDef : List (Name, CairoDef) -> (Name, CairoDef) -> (Name, CairoDef)
-localStaticOptimizeDef defs def = snd $ runVisitTransformCairoDef (transformerPipeline, initialState) def
+localStaticOptimizeDef' : SortedMap Name CairoDef -> (Name, CairoDef) -> (Name, CairoDef)
+localStaticOptimizeDef' defs def = snd $ runVisitTransformCairoDef (transformerPipeline, initialState) def
     where liftedStaticValueTracker: (v:InstVisit StaticInfo) -> Traversal LocalStaticOptimState (ValBindType v StaticInfo)
           liftedStaticValueTracker inst = composeState bindingsLens (staticValueTracker inst)
           branchAwareFolder : InstVisit StaticInfo -> Traversal LocalStaticOptimState (List (InstVisit CairoReg))
-          branchAwareFolder = fallbackTraversal branchEliminationDetection (constantFoldTransform (fromList defs))
+          branchAwareFolder = fallbackTraversal branchEliminationDetection (constantFoldTransform defs)
           transformPipeline : InstVisit StaticInfo -> Traversal LocalStaticOptimState (List (InstVisit CairoReg))
           transformPipeline = chainedTraversal branchAwareFolder (lensTraversal dedupStateLens instructionDeduplication)
           dbgDef : (Name, CairoDef) -> CairoReg -> StaticInfo
           dbgDef (name, def) reg = trace "Register not bound in \{show name}: \{show reg}" (MKStaticInfo (singleton reg) Unknown)
+          prepareB : CairoReg -> StaticInfo -> StaticInfo
+          prepareB r rs = addBinding rs r
           activeBranchPipeline : InstVisit CairoReg -> Traversal LocalStaticOptimState (List (InstVisit CairoReg))
-          activeBranchPipeline = valueTransformer bindingsLens (dbgDef def) liftedStaticValueTracker transformPipeline
+          activeBranchPipeline = valueTransformer bindingsLens (dbgDef def) prepareB liftedStaticValueTracker transformPipeline
           transformerPipeline : InstVisit CairoReg -> Traversal LocalStaticOptimState (List (InstVisit CairoReg))
           transformerPipeline = fallbackTraversal branchFilter activeBranchPipeline
           initialState : LocalStaticOptimState
-          initialState = MkLocalStaticOptimState initialDedupState initialTrackerState 0
+          initialState = MkLocalStaticOptimState initialDedupState initialTrackerState 0 (mkRegisterGen "transformer")
+
+export
+localStaticOptimizeDef : List (Name, CairoDef) -> (Name, CairoDef) -> (Name, CairoDef)
+localStaticOptimizeDef defs def = localStaticOptimizeDef' (fromList defs) def
 
 public export
 localStaticOptimizeDefs : List (Name, CairoDef) -> List (Name, CairoDef)
-localStaticOptimizeDefs defs = map (localStaticOptimizeDef defs) defs
+localStaticOptimizeDefs defs = let allDefs = fromList defs in map (localStaticOptimizeDef' allDefs) defs
 
 -- A version witch allows generified call handling --
 public export
@@ -264,6 +344,9 @@ record GlobalStaticOptimState s where
     constructor MkGlobalStaticOptimState
     folderState : LocalStaticOptimState
     globalState : s
+
+getDepth : Traversal (GlobalStaticOptimState s) Int
+getDepth = pure $ extractDepth $ bindings $ folderState !readState
 
 -- Lenses for leaner and more readable main definitions
 folderStateLens : Lens (GlobalStaticOptimState s) LocalStaticOptimState
@@ -273,6 +356,15 @@ globalStateLens : Lens (GlobalStaticOptimState s) s
 globalStateLens = MkLens globalState (\ts,fn => {globalState $= fn} ts)
 
 public export
+record CreateCloData where
+    constructor MKCreateCloData
+    function: Name
+    depth : Int
+    arguments : List StaticInfo
+    missing : Nat
+    return : CairoReg
+
+public export
 interface CallHandler s where
     -- Binds values of function value
     context : (List CairoReg, SortedMap LinearImplicit CairoReg) -> Traversal s (List StaticInfo, SortedMap LinearImplicit StaticInfo)
@@ -280,22 +372,29 @@ interface CallHandler s where
     return : List StaticInfo -> SortedMap LinearImplicit StaticInfo -> Traversal s ()
     -- Extract tracked values from processed function
     track : CallData -> Traversal s (List StaticInfo, SortedMap LinearImplicit StaticInfo)
-    -- Replace tracked function with inlined code
-    transform : CallData -> Traversal s (List (InstVisit CairoReg))
+    -- Replace tracked function with inlined code or specialize, ...
+    transformCall : CallData -> Traversal s (List (InstVisit CairoReg))
+    -- Replace tracked closure with specialized closure, ...
+    transformClosure: CreateCloData -> Traversal s (List (InstVisit CairoReg))
     -- defaults (same as unmodified value Tracker)
     context (params, impls) = pure (map paramInit params, mapValueMap paramInit impls)
         where paramInit : CairoReg -> StaticInfo
               paramInit reg = MKStaticInfo (singleton reg) Unknown
     return _ _ = pure ()
-    track (MKCallData _ impls _ rs) = pure (map (\r => MKStaticInfo (singleton r) Unknown) rs, staticImplTracker impls)
+    track (MKCallData _ _ impls _ rs) = pure (map (\r => MKStaticInfo (singleton r) Unknown) rs, staticImplTracker impls)
+    transformClosure (MKCreateCloData name _ args miss r) = pure [VisitMkClosure r name miss (map resolveInfToReg args)]
     -- todo: make a more advanced inline error based one here as default -- needs to factor out traversal
-    transform (MKCallData name impls args rs) = pure [VisitCall rs (resolveLinearImplicits impls) name (map resolveInfToReg args)]
+    transformCall (MKCallData name _ impls args rs) = pure [VisitCall rs (resolveLinearImplicits impls) name (map resolveInfToReg args)]
+
 
 callTracking : CallHandler s => CallData -> Traversal (GlobalStaticOptimState s) (List StaticInfo, SortedMap LinearImplicit StaticInfo)
 callTracking callData = composeState globalStateLens (track callData)
 
 callTransform: CallHandler s => CallData -> Traversal (GlobalStaticOptimState s) (List (InstVisit CairoReg))
-callTransform callData = composeState globalStateLens (transform callData)
+callTransform callData = composeState globalStateLens (transformCall callData)
+
+closureTransform : CallHandler s => CreateCloData -> Traversal (GlobalStaticOptimState s) (List (InstVisit CairoReg))
+closureTransform  cloData = composeState globalStateLens (transformClosure cloData)
 
 -- The actual generified folder (usable for global folding, inlining, specialisation, ...)
 {-
@@ -321,8 +420,8 @@ globalStaticOptimizeDef defs globalState def = extract $ runVisitTransformCairoD
           -- These use the CallHandler to customize the value Tracker
           -- we use explicit branching for 'customizedStaticValueTracker' because 'fallbackTraversal' has problems handling dependent type 'ValBindType v StaticInfo'
           customizedStaticValueTracker : (v:InstVisit StaticInfo) -> Traversal (GlobalStaticOptimState s) (ValBindType v StaticInfo)
-          customizedStaticValueTracker (VisitCall rs impls name args) = callTracking (MKCallData name impls args rs)
-          customizedStaticValueTracker (VisitFunction _ params impls _) = composeState globalStateLens (context (params, impls))
+          customizedStaticValueTracker (VisitCall rs impls name args) = getDepth >>= (\d => callTracking (MKCallData name d impls args rs))
+          customizedStaticValueTracker (VisitFunction _ _ params impls _) = composeState globalStateLens (context (params, impls))
           -- Note: Putting this here is suboptimal as it requires the tracker to handle it
           --  but putting it in the transform prevents transformations of returns
           --  thats why its here and why we added a forwarding in the return case of the tracker
@@ -331,7 +430,8 @@ globalStaticOptimizeDef defs globalState def = extract $ runVisitTransformCairoD
           -- These use the CallHandler to customize the constant Folder
           -- we use explicit branching for 'customizedConstantFoldTransform' to be congruent with 'customizedStaticValueTracker'
           customizedConstantFoldTransform : InstVisit StaticInfo -> Traversal (GlobalStaticOptimState s) (List (InstVisit CairoReg))
-          customizedConstantFoldTransform (VisitCall rs impls name args) = callTransform (MKCallData name impls args rs)
+          customizedConstantFoldTransform (VisitCall rs impls name args) = getDepth >>= (\d => callTransform (MKCallData name d impls args rs))
+          customizedConstantFoldTransform (VisitMkClosure r name miss args) = getDepth >>= (\d => closureTransform (MKCreateCloData name d args miss r))
           customizedConstantFoldTransform inst = liftedConstantFoldTransform inst
           -- These are the same as in the local variant
           branchAwareFolder : InstVisit StaticInfo -> Traversal (GlobalStaticOptimState s) (List (InstVisit CairoReg))
@@ -340,12 +440,14 @@ globalStaticOptimizeDef defs globalState def = extract $ runVisitTransformCairoD
           transformPipeline = chainedTraversal branchAwareFolder (lensTraversal (join folderStateLens dedupStateLens) instructionDeduplication)
           dbgDef : (Name, CairoDef) -> CairoReg -> StaticInfo
           dbgDef (name, def) reg = trace "Register not bound in \{show name}: \{show reg}" (MKStaticInfo (singleton reg) Unknown)
+          prepareB : CairoReg -> StaticInfo -> StaticInfo
+          prepareB r rs = addBinding rs r
           activeBranchPipeline : InstVisit CairoReg -> Traversal (GlobalStaticOptimState s) (List (InstVisit CairoReg))
-          activeBranchPipeline = valueTransformer bindLens (dbgDef def) customizedStaticValueTracker transformPipeline
+          activeBranchPipeline = valueTransformer bindLens (dbgDef def) prepareB customizedStaticValueTracker transformPipeline
           transformerPipeline : InstVisit CairoReg -> Traversal (GlobalStaticOptimState s) (List (InstVisit CairoReg))
           transformerPipeline = fallbackTraversal liftedBranchFilter activeBranchPipeline
           initialState : GlobalStaticOptimState s
-          initialState = MkGlobalStaticOptimState (MkLocalStaticOptimState initialDedupState initialTrackerState 0) globalState
+          initialState = MkGlobalStaticOptimState (MkLocalStaticOptimState initialDedupState initialTrackerState 0 (mkRegisterGen "transformer")) globalState
           -- this does extract the CallHandler state from the GlobalStaticOptimState
           extract : (GlobalStaticOptimState s, (Name, CairoDef)) -> ((Name, CairoDef), s)
           extract (MkGlobalStaticOptimState _ globalState, def) = (def, globalState)

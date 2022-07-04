@@ -31,12 +31,10 @@ fromPrimCairoUnit f = MkCairo (\s => MkCairoRes (f s) ())
 public export %inline
 toPrimCairo : (1 ca : Cairo a) -> PrimCairo a
 toPrimCairo (MkCairo f) = f
+ 
 
-%noinline
-public export
-unsafePerformIO : (ca : Cairo a) -> a
-unsafePerformIO ca = let (MkCairoRes _ a) = (toPrimCairo ca (believe_me 0)) in a
 
+{-
 -- Specializing Functor for performance
 public export -- %spec f,ca
 map : (f : (a -> b)) -> (1 ca : Cairo a) -> Cairo b
@@ -68,26 +66,33 @@ public export -- %spec ma,mb
 (>>) : (ma: Cairo ()) -> (mb: (Cairo a)) -> Cairo a
 (MkCairo ma) >> (MkCairo mb) = 
   MkCairo (\s => let MkCairoRes s' _ = ma s in mb s')
+ -}
 
-{- 
-export %inline 
+public export %inline 
 Functor Cairo where
-    map = Main.map
+   -- map : (f : (a -> b)) -> (1 ca : Cairo a) -> Cairo b
+    map f (MkCairo ma) = MkCairo 
+      (\s => let MkCairoRes s' a = ma s
+              in MkCairoRes s' (f a))
 
- 
-export %inline
+public export %inline
 Applicative Cairo where
-    pure = Main.pure
-    (<*>) = Main.(<*>)
+    pure a = MkCairo (\s => MkCairoRes s a)
+    (MkCairo mf) <*> (MkCairo ma) = 
+      MkCairo (\s => let MkCairoRes s' f = mf s
+                         MkCairoRes s'' a = ma s'
+                      in MkCairoRes s'' (f a))
 
-export %inline
+public export %inline
 Monad Cairo where    
-   (>>=) = Main.(>>=)
-   join x = x >>= id
--}
+   (MkCairo ma) >>= f = 
+     MkCairo (\s => let MkCairoRes s' a = ma s 
+                     in toPrimCairo (f a) s')
+   -- join x = x >>= id
+
 
 --------------------------------------------
--- Traversable (specialised) halfs the number of steps. why?
+-- Traversable specialised for performance.
 public export -- %spec f
 traverse : (f: (a -> Cairo b)) -> (la: List a) -> Cairo (List b)
 traverse f xs = traverse' xs []
@@ -95,4 +100,3 @@ traverse f xs = traverse' xs []
     traverse' : List a -> List b -> Cairo (List b)
     traverse' [] acc = pure (reverse acc)
     traverse' (x :: xs) acc = traverse' xs (!(f x) :: acc)
-

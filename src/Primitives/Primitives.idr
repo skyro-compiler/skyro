@@ -2,6 +2,7 @@ module Primitives.Primitives
 
 import Core.Context
 import CairoCode.CairoCode
+import CairoCode.CairoCodeUtils
 import Data.SortedSet
 import Data.SortedMap
 import Primitives.Common
@@ -19,23 +20,23 @@ import CommonDef
   eval [_] = Just $ ArgValue 0 
   eval _ = Nothing
 
-  generateCode r [a] _ = Raw "\{ compileRegDecl r } = \{ compileReg a } # no_op\n"
-  generateCode _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode no_op"
+  generateCode _ r [a] _ = Raw "\{ compileRegDecl r } = \{ compileReg a } # no_op\n"
+  generateCode _ _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode no_op"
 
 [believeme] PrimFn where
   eval [_,_,_] = Just $ ArgValue 2 -- Do nothing, trust that it works :)
   eval _ = Nothing
 
-  generateCode r [_,_,a] _ = Raw "\{ compileRegDecl r } = \{ compileReg a } # believeme\n"
-  generateCode _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode believeme"
+  generateCode _ r [_,_,a] _ = Raw "\{ compileRegDecl r } = \{ compileReg a } # believeme\n"
+  generateCode _ _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode believeme"
 
 -- Todo: extract error message if static
 [crash] PrimFn where
   eval [_,_] = Just $ Failure "Crash"
   eval _ = Nothing
 
-  generateCode r [_,_] _ = Instructions [ERROR r "Crash"]
-  generateCode _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode crash"
+  generateCode _ r [_,_] _ = Instructions [ERROR r "Crash"]
+  generateCode _ _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode crash"
 
 
 associate : (rec:PrimFn) => (f:(PrimFn -> a)) -> a
@@ -97,7 +98,7 @@ dispatch (Div t) = case t of
   Bits16Type => associate @{div_uint16}
   Bits32Type => associate @{div_uint32}
   Bits64Type => associate @{div_uint64}
-  _ => assert_total $ idris_crash $ "Type not supported for mul: " ++ show t
+  _ => assert_total $ idris_crash $ "Type not supported for div: " ++ show t
 
 dispatch (Mod t) = case t of
   IntType => associate @{mod_int}
@@ -133,8 +134,8 @@ dispatch (ShiftL t) = case t of
   Int16Type => associate @{shl_int16}
   Int32Type => associate @{shl_int32}
   Int64Type => associate @{shl_int64}
-  -- FeltType => associate @{shl_felt}
-  -- IntegerType => associate @{shl_integer}
+  FeltType => associate @{shl_felt}
+  IntegerType => assert_total $ idris_crash "left shift on big integers is not supported" -- associate @{shl_integer}
   Bits8Type => associate @{shl_uint8}
   Bits16Type => associate @{shl_uint16}
   Bits32Type => associate @{shl_uint32}
@@ -147,8 +148,8 @@ dispatch (ShiftR t) = case t of
   Int16Type => associate @{shr_int16}
   Int32Type => associate @{shr_int32}
   Int64Type => associate @{shr_int64}
-  -- FeltType => associate @{shr_felt}
-  -- IntegerType => associate @{shr_integer}
+  FeltType => associate @{shr_felt}
+  IntegerType => assert_total $ idris_crash "right shift on big integers is not supported" -- associate @{shr_integer}
   Bits8Type => associate @{shr_uint8}
   Bits16Type => associate @{shr_uint16}
   Bits32Type => associate @{shr_uint32}
@@ -161,8 +162,8 @@ dispatch (BAnd t) = case t of
   Int16Type => associate @{and_int16}
   Int32Type => associate @{and_int32}
   Int64Type => associate @{and_int64}
-  -- FeltType => associate @{and_felt}
-  -- IntegerType => associate @{and_integer}
+  FeltType => associate @{and_felt}
+  IntegerType => assert_total $ idris_crash "bitwise and on big integers is not supported" -- associate @{and_integer}
   Bits8Type => associate @{and_uint8}
   Bits16Type => associate @{and_uint16}
   Bits32Type => associate @{and_uint32}
@@ -175,8 +176,8 @@ dispatch (BOr t) = case t of
   Int16Type => associate @{or_int16}
   Int32Type => associate @{or_int32}
   Int64Type => associate @{or_int64}
-  -- FeltType => associate @{or_felt}
-  -- IntegerType => associate @{or_integer}
+  FeltType => associate @{or_felt}
+  IntegerType => assert_total $ idris_crash "bitwise or on big integers is not supported" -- associate @{or_integer}
   Bits8Type => associate @{or_uint8}
   Bits16Type => associate @{or_uint16}
   Bits32Type => associate @{or_uint32}
@@ -189,8 +190,8 @@ dispatch (BXOr t) = case t of
   Int16Type => associate @{xor_int16}
   Int32Type => associate @{xor_int32}
   Int64Type => associate @{xor_int64}
-  -- FeltType => associate @{xor_felt}
-  -- IntegerType => associate @{xor_integer}
+  FeltType => associate @{xor_felt}
+  IntegerType => assert_total $ idris_crash "bitwise xor on big integers is not supported" -- associate @{xor_integer}
   Bits8Type => associate @{xor_uint8}
   Bits16Type => associate @{xor_uint16}
   Bits32Type => associate @{xor_uint32}
@@ -203,8 +204,8 @@ dispatch (LT t) = case t of
   Int16Type => associate @{lt_int16}
   Int32Type => associate @{lt_int32}
   Int64Type => associate @{lt_int64}
-  -- FeltType => associate @{lt_felt}
-  -- IntegerType => associate @{lt_integer}
+  FeltType => associate @{lt_felt}
+  IntegerType => associate @{lt_integer}
   Bits8Type => associate @{lt_uint8}
   Bits16Type => associate @{lt_uint16}
   Bits32Type => associate @{lt_uint32}
@@ -217,8 +218,8 @@ dispatch (LTE t) = case t of
   Int16Type => associate @{lte_int16}
   Int32Type => associate @{lte_int32}
   Int64Type => associate @{lte_int64}
-  -- FeltType => associate @{lte_felt}
-  -- IntegerType => associate @{lte_integer}
+  FeltType => associate @{lte_felt}
+  IntegerType => associate @{lte_integer}
   Bits8Type => associate @{lte_uint8}
   Bits16Type => associate @{lte_uint16}
   Bits32Type => associate @{lte_uint32}
@@ -232,7 +233,7 @@ dispatch (EQ t) = case t of
   Int32Type => associate @{eq_int32}
   Int64Type => associate @{eq_int64}
   FeltType => associate @{eq_felt}
-  -- IntegerType => associate @{eq_integer}
+  IntegerType => associate @{eq_integer}
   Bits8Type => associate @{eq_uint8}
   Bits16Type => associate @{eq_uint16}
   Bits32Type => associate @{eq_uint32}
@@ -245,8 +246,8 @@ dispatch (GTE t) = case t of
   Int16Type => associate @{gte_int16}
   Int32Type => associate @{gte_int32}
   Int64Type => associate @{gte_int64}
-  -- FeltType => associate @{gte_felt}
-  -- IntegerType => associate @{gte_integer}
+  FeltType => associate @{gte_felt}
+  IntegerType => associate @{gte_integer}
   Bits8Type => associate @{gte_uint8}
   Bits16Type => associate @{gte_uint16}
   Bits32Type => associate @{gte_uint32}
@@ -259,8 +260,8 @@ dispatch (GT t) = case t of
   Int16Type => associate @{gt_int16}
   Int32Type => associate @{gt_int32}
   Int64Type => associate @{gt_int64}
-  -- FeltType => associate @{gt_felt}
-  -- IntegerType => associate @{gt_integer}
+  FeltType => associate @{gt_felt}
+  IntegerType => associate @{gt_integer}
   Bits8Type => associate @{gt_uint8}
   Bits16Type => associate @{gt_uint16}
   Bits32Type => associate @{gt_uint32}
@@ -307,10 +308,16 @@ dispatch (Cast t Int64Type) = case t of
   _ => associate @{cast_to_int64}
 
 dispatch (Cast IntegerType FeltType) = associate @{cast_integer_to_felt}
-dispatch (Cast _ FeltType) = associate @{cast_to_felt}
+dispatch (Cast _ FeltType) = associate @{no_op}
 
-dispatch (Cast IntegerType IntegerType) = associate @{no_op}
-dispatch (Cast _ IntegerType) = associate @{cast_to_integer}
+dispatch (Cast t IntegerType) =  case t of
+    IntegerType => associate @{no_op}
+    FeltType => associate @{cast_felt_to_integer}
+    Bits8Type => associate @{cast_unsigned_to_integer}
+    Bits16Type => associate @{cast_unsigned_to_integer}
+    Bits32Type => associate @{cast_unsigned_to_integer}
+    Bits64Type => associate @{cast_unsigned_to_integer}
+    _ => associate @{cast_signed_to_integer}
 
 -- Casts to Bits8
 dispatch (Cast t Bits8Type) = case t of
@@ -364,24 +371,24 @@ primFnImports : CairoPrimFn -> SortedSet Import
 primFnImports fn = dispatch fn imports
 
 export
-primFnDependencies : CairoPrimFn -> SortedMap Name (Lazy CairoDef)
-primFnDependencies fn = dispatch fn dependencies
-
-export
-primFnDependencyNames : CairoPrimFn -> SortedSet Name
-primFnDependencyNames = keySet . primFnDependencies
-
-export
-generatePrimFnCode : CairoPrimFn -> (res:CairoReg) -> (args:List CairoReg) -> LinearImplicitArgs -> PrimFnCode
+generatePrimFnCode : CairoPrimFn -> String -> (res:CairoReg) -> (args:List CairoReg) -> LinearImplicitArgs -> PrimFnCode
 generatePrimFnCode fn = dispatch fn generateCode
 
-export
-findPrimFnDeps: List (Name, CairoDef) -> List (Name, CairoDef)
-findPrimFnDeps defs = map (\(n,d) => (n,d)) $ SortedMap.toList allDeps
-  where
-    primFnCollector : InstVisit CairoReg -> SortedMap Name (Lazy CairoDef)
-    primFnCollector (VisitOp _ _ primFn _) = primFnDependencies primFn
-    primFnCollector _ = empty
+[default_manifest] ConstReg where
+    -- all defaults
 
-    allDeps : SortedMap Name (Lazy CairoDef)
-    allDeps = snd $ runVisitConcatCairoDefs @{dropDuplicateKeysMonoid} (pureTraversal primFnCollector) defs
+export
+manifestConstReg : String -> CairoReg -> (Maybe String, CairoReg)
+manifestConstReg unique r@(Const (BI _)) = manifestConstantReg @{manifestBigInteger} unique r
+manifestConstReg unique r@(Const (Str _)) = assert_total $ idris_crash $ "Strings not yet implemented"
+manifestConstReg unique r@(Const (Ch _)) = assert_total $ idris_crash $ "Characters Integers not yet implemented"
+manifestConstReg unique r@(Const _) = manifestConstantReg @{default_manifest} unique r
+manifestConstReg unique r = assert_total $ idris_crash $ "Not a constant: " ++ (show r)
+
+
+export
+assignConstReg : CairoReg -> CairoConst -> String
+assignConstReg r c@(BI _) = assignConstantReg @{manifestBigInteger} r c
+assignConstReg r c@(Str _) = assert_total $ idris_crash $ "Strings not yet implemented"
+assignConstReg r c@(Ch _) = assert_total $ idris_crash $ "Characters Integers not yet implemented"
+assignConstReg r c = assignConstantReg @{default_manifest} r c

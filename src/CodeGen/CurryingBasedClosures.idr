@@ -22,6 +22,7 @@ allClosures defs = snd $ runVisitConcatCairoDefs (pureTraversal closureInfoTrave
 
 extractOrderedImpls : CairoDef -> List LinearImplicit
 extractOrderedImpls (FunDef _ impls _ _) = keys impls
+extractOrderedImpls (ExtFunDef _ _ impls _ _) = keys impls
 extractOrderedImpls (ForeignDef (MkForeignInfo _ _ impls _ _) _ _) = impls
 
 extractImpls : (Name, CairoDef) -> (Name, SortedSet LinearImplicit)
@@ -36,7 +37,7 @@ extractClosureImplicits defs = snd $ runVisitConcatCairoDefs (pureTraversal clos
           closureImplicitsTraversal _ = empty
 
 deriveCurriedClosureName : Name -> Int -> Name
-deriveCurriedClosureName name miss = MN ("curried_"++(cairoName name)) miss
+deriveCurriedClosureName name miss = MN ("curried__"++(cairoName name)) miss
 
 generateCurriedBody : SortedMap LinearImplicit CairoReg -> Name -> Int -> List CairoInst
 generateCurriedBody outerImpls callTarget params = projects ++ [MKCLOSURE retReg callTarget 1 (paramRegs ++ [(Param 1)]), RETURN [retReg] outerImpls]
@@ -61,31 +62,32 @@ generateCallBody outerImpls innerImpls callTarget params = projects ++ [CALL ret
           projects = zipWith (\r,i => PROJECT r (Param 0) (cast i)) paramRegs (fromZeroTo (params - 1) )
 
 generateClosureWrapperDefs : SortedSet LinearImplicit -> ((Name, CairoDef), Int) -> List (Name, CairoDef)
-generateClosureWrapperDefs impls ((name, FunDef params callImpls [_] _), 1) = (deriveCurriedClosureName name 1, FunDef [Param 0, Param 1] nImpls ["applied_ret"] body)::Nil
+generateClosureWrapperDefs impls ((name, FunDef params callImpls [_] _), 1) = (deriveCurriedClosureName name 1, FunDef [Param 0, Param 1] nImpls [CustomReg "applied_ret" Nothing] body)::Nil
    where nImpls : SortedMap LinearImplicit CairoReg
          nImpls = fromList $ map (\i => (i, implicitReg i)) (toList impls)
          body : List CairoInst
          body = generateCallBody nImpls (fromList $ keys callImpls) name ((cast $ length params) - 1)
 
-generateClosureWrapperDefs impls (def@(name, FunDef params callImpls [_] _), n) = (deriveCurriedClosureName name n, FunDef [Param 0, Param 1] nImpls ["applied_ret"] body)::(generateClosureWrapperDefs impls (def, n-1))
+generateClosureWrapperDefs impls (def@(name, FunDef params callImpls [_] _), n) = (deriveCurriedClosureName name n, FunDef [Param 0, Param 1] nImpls [CustomReg "applied_ret" Nothing] body)::(generateClosureWrapperDefs impls (def, n-1))
    where nImpls : SortedMap LinearImplicit CairoReg
          nImpls = fromList $ map (\i => (i, implicitReg i)) (toList impls)
          body : List CairoInst
          body = generateCurriedBody nImpls (deriveCurriedClosureName name (n-1)) ((cast $ length params) - n)
 
-generateClosureWrapperDefs impls ((name, ForeignDef (MkForeignInfo _ _ callImpls _ _) params 1), 1) =  (deriveCurriedClosureName name 1, FunDef [Param 0, Param 1] nImpls ["applied_ret"] body)::Nil
+generateClosureWrapperDefs impls ((name, ForeignDef (MkForeignInfo _ _ callImpls _ _) params 1), 1) =  (deriveCurriedClosureName name 1, FunDef [Param 0, Param 1] nImpls [CustomReg "applied_ret" Nothing] body)::Nil
     where nImpls : SortedMap LinearImplicit CairoReg
           nImpls = fromList $ map (\i => (i, implicitReg i)) (toList impls)
           body : List CairoInst
           body = generateCallBody nImpls (fromList callImpls) name ((cast params) - 1)
 
-generateClosureWrapperDefs impls (def@(name, ForeignDef (MkForeignInfo _ _ callImpls _ _) params 1), n) =  (deriveCurriedClosureName name n, FunDef [Param 0, Param 1] nImpls ["applied_ret"] body)::(generateClosureWrapperDefs impls (def, n-1))
+generateClosureWrapperDefs impls (def@(name, ForeignDef (MkForeignInfo _ _ callImpls _ _) params 1), n) =  (deriveCurriedClosureName name n, FunDef [Param 0, Param 1] nImpls [CustomReg "applied_ret" Nothing] body)::(generateClosureWrapperDefs impls (def, n-1))
     where nImpls : SortedMap LinearImplicit CairoReg
           nImpls = fromList $ map (\i => (i, implicitReg i)) (toList impls)
           body : List CairoInst
           body = generateCurriedBody nImpls (deriveCurriedClosureName name (n-1)) ((cast params) - n)
 
-generateClosureWrapperDefs impls _ = assert_total $ idris_crash "ClosureGen: Closure targets must return a single values"
+generateClosureWrapperDefs _ ((_, ExtFunDef _ _ _ _ _), _) = assert_total $ idris_crash "ClosureGen: Closure targets can not be external"
+generateClosureWrapperDefs impls _ = assert_total $ idris_crash "ClosureGen: Closure targets must return a single value"
 
 generateClosureWrappers : SortedSet LinearImplicit -> List (Name, CairoDef) -> List (Name, CairoDef)
 generateClosureWrappers impls defs = affectedFunctions >>= (generateClosureWrapperDefs impls)
@@ -115,39 +117,33 @@ preprocessClosures cairocode = (generateClosureWrappers impls cairocode) ++ nCai
 
 
 export
-genMkClosure : (res:CairoReg) -> Name -> (missing : Nat) -> (args : List CairoReg) -> String
-genMkClosure reg name 1 args = """
+genMkClosure : String -> (res:CairoReg) -> Name -> (missing : Nat) -> (args : List CairoReg) -> String
+genMkClosure unique reg name 1 args = """
     #MKCLOSURE
-    let (\{ compileReg reg }_ptr) = alloc()
-    \{ compileRegDecl reg } = cast(\{ compileReg reg }_ptr,felt)
     const \{ targetAddr } = \{ targetName } - programStart
-    \{ fst res }
+    tempvar \{ ptrName } = new ( \{ showSep ", " (targetAddr::(map compileReg args)) }  )
+    \{ compileRegDeclRef reg } = cast(\{ ptrName },felt)
 
     """
-    {-
-    -- More efficient but not starknet compatible (because it uses hints)
-    #MKCLOSURE
-    \{ compileRegManifest reg }
-    %{ ids.\{regName} = segments.add() %}
-    const \{ targetAddr } = \{ targetName } - programStart
-    \{ fst res }
-    -}
-    where regName : String
-          regName = compileReg reg
-          targetName : String
+    where targetName : String
           targetName = cairoName name
           targetAddr : String
-          targetAddr = targetName ++ "_addr"
-          offset : Int -> String
-          offset n = if n < 0 then " - " ++ show (-n) else " + " ++ show n
-          res : (String, Int)
-          res = foldl (\(acc, cnt), comp => (acc ++ "assert [\{ regName }\{ offset cnt }] = \{ comp }\n", cnt+1)) ("", 0) (targetAddr::(map compileReg args))
-genMkClosure _ name _ _ = assert_total $ idris_crash "CurriedClosureGen: Target \{cairoName name} is not in curried form"
+          targetAddr = unique ++ "_addr_"
+          ptrName : String
+          ptrName = compileReg reg ++ "_ptr_" ++ show (length args)
+-- if compileRegDeclRef not works with cast then use \{ compileRegDecl reg } = cast(\{ compileReg reg }_ptr_,felt)
 
 
+genMkClosure _ _ name _ _ = assert_total $ idris_crash "CurriedClosureGen: Target \{cairoName name} is not in curried form"
+
+
+-- Todo: if jmpPointName is twice the same it fails
+--       it seems that this worked earlier just like const (maybe their was a cairo change)
+--   Hack - fix implemented by using all avaiable infos
+--   For real fix a unique string needs to be passed in
 export
-genMkApply : (res:CairoReg) -> LinearImplicitArgs -> (f : CairoReg) -> (a : CairoReg) -> String
-genMkApply r impls f a = """
+genMkApply : String -> (res:CairoReg) -> LinearImplicitArgs -> (f : CairoReg) -> (a : CairoReg) -> String
+genMkApply unique r impls f a = """
     #APPLY closure
     \{ fst mf } tempvar dispatcher = [\{ snd mf }] - (\{jmpPointName} - programStart)
     \{ fst ma } \{concatMap fst mImpls}
@@ -160,13 +156,13 @@ genMkApply r impls f a = """
     \{ rImpls }
     """
     where jmpPointName : String
-          jmpPointName = (regName r) ++ "_" ++ "jumpPoint"
+          jmpPointName = unique ++ "_jumpPoint_"
           mf : (String, String)
           mf = ensureManifested f "closure"
           ma : (String, String)
           ma = ensureManifested a "argument"
           mImpls : List (String, String)
-          mImpls = map (\(i,(f,_)) => ensureManifested f ("manifest_"++(implicitName i))) (toList impls)
+          mImpls = map (\(i,(f,_)) => ensureManifested f ("manifest_"++(implicitName i)++"_")) (toList impls)
           numImpls : Int
           numImpls = cast $ length mImpls
           rImpls : String

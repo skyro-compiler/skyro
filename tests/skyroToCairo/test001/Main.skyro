@@ -1,0 +1,32 @@
+foreign NS_15_Cairo_dotOutput_UB_11_cairooutput{}(2) -> (1) stable <none> {
+  """
+func Cairo_Output_cairooutput(value, output_ptr) -> (output_ptr):
+    assert [output_ptr] = value
+    return (output_ptr + 1)
+end"""
+}
+
+fun NS_4_Main_UB_3_fib(param 0) -> (reg   "res") {
+  const_case(param 0) {
+    0f -> {
+      return (const 0f)
+    }
+    1f -> {
+      return (const 1f)
+    }
+    default {
+      (let   3 @1) = @Felt (param 0 - const 1f);
+      (local 0 @1) = NS_4_Main_UB_3_fib(let   3 @1);
+      (let   2 @1) = @Felt (param 0 - const 2f);
+      (let   1 @1) = NS_4_Main_UB_3_fib(let   2 @1);
+      (let   0 @1) = @Felt (local 0 @1 + let   1 @1);
+      return (let   0 @1)
+    }
+  }
+}
+
+extfun NS_0__UB_4_main{output_ptr@(reg   "output_ptr")}() -> () {
+  (let   1 @0) = NS_4_Main_UB_3_fib(const 5f);
+  (let   0 @0) = NS_15_Cairo_dotOutput_UB_11_cairooutput(let   1 @0, reg   "output_ptr");
+  return {output_ptr@(let   0 @0)}()
+}

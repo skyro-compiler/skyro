@@ -15,3 +15,15 @@ public export
     end
     """
 pedersenHash : Felt -> Felt -> Felt
+ 
+export 
+interface Hashable a where
+  hash : a -> Felt
+
+export
+Hashable Felt where
+  hash f = f
+
+export
+(Hashable a, Hashable b) => Hashable (a,b) where
+  hash (a,b) = pedersenHash (hash a) (hash b)

@@ -11,6 +11,7 @@ export
 tainted : Felt -> TaintedMessage
 tainted = MkTaintedMessage
 
+
 -- Returns the verified message
 -- This function is not safe: If the returned value is ignored, Idris is free to eliminate the call to this function altogether.
 export %inline

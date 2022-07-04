@@ -16,6 +16,7 @@ import Utils.Helpers
 
 extractImpls : (Name, CairoDef) -> (Name, SortedSet LinearImplicit)
 extractImpls (n, FunDef _ impls _ _) = (n, fromList $ keys impls)
+extractImpls (n, ExtFunDef _ _ impls _ _) = (n, fromList $ keys impls)
 extractImpls (n, ForeignDef (MkForeignInfo _ _ impls _ _) _ _) = (n, fromList impls)
 
 preloadLinearImplicitsDefs : List (Name, CairoDef) -> SortedMap Name (SortedSet LinearImplicit)
@@ -26,6 +27,12 @@ collectApplyLinearImplicits implicitLookup defs = snd $ runVisitConcatCairoDefs 
     where closureCollectTraversal : InstVisit CairoReg -> SortedSet LinearImplicit
           closureCollectTraversal (VisitMkClosure _ name _ _ ) = fromMaybe empty (lookup name implicitLookup)
           closureCollectTraversal _ = empty
+
+
+starkNetIntrinsicsNeededImplicits : StarkNetIntrinsic -> SortedSet LinearImplicit
+-- Note: StorageVarAddr cairo functions take builtins, however unless they have arguments, they do not use them & ours do not have arguments
+starkNetIntrinsicsNeededImplicits (StorageVarAddr _) = empty -- fromList [pedersen_builtin, range_check_builtin]
+starkNetIntrinsicsNeededImplicits (EventSelector _) = empty -- fromList [pedersen_builtin, range_check_builtin]
 
 
 discoverNeededLinearImplicitsDef : SortedMap Name (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (Name, CairoDef) -> SortedSet LinearImplicit
@@ -40,6 +47,7 @@ discoverNeededLinearImplicitsDef implicitLookup applyLinearImplicits def = snd $
             neededLinearImplicits (VisitApply _ linImpls _ _) = exludeExisting applyLinearImplicits linImpls
             neededLinearImplicits (VisitCall _ linImpls name _) = exludeExisting (lookupLinearImplicits name) linImpls
             neededLinearImplicits (VisitExtprim _ linImpls name _) = exludeExisting (fromList $ externalLinearImplicits name) linImpls
+            neededLinearImplicits (VisitStarkNetIntrinsic _ linImpls intr _) = exludeExisting (starkNetIntrinsicsNeededImplicits intr) linImpls
             neededLinearImplicits (VisitOp  _ linImpls fn _) = exludeExisting (primFnLinearImplicits fn) linImpls
             -- This is just an integrity check
             neededLinearImplicits (VisitReturn _ linImpls) = if definedImpls /= (keys linImpls)
@@ -139,7 +147,7 @@ leaveBranch = updateState update
 implicitRegTransformer : SortedSet Name -> Bool -> LinearImplicit -> (InstVisit CairoReg -> Traversal RegTrackerState (List (InstVisit CairoReg)))
 implicitRegTransformer neededByCall neededByApply impl = implicitRegInjector
     where implicitRegInjector : InstVisit CairoReg -> Traversal RegTrackerState (List (InstVisit CairoReg))
-          implicitRegInjector (VisitFunction name params linImpls rets) = map (\r => [VisitFunction name params (insert impl r linImpls) rets]) getCurrentReg
+          implicitRegInjector (VisitFunction name tags params linImpls rets) = map (\r => [VisitFunction name tags params (insert impl r linImpls) rets]) getCurrentReg
           implicitRegInjector inst@(VisitApply res linImpls clo arg) = if neededByApply
               then map (\bind => [VisitApply res (insert impl bind linImpls) clo arg]) advanceRegBinding
               else pure [inst]
@@ -152,6 +160,9 @@ implicitRegTransformer neededByCall neededByApply impl = implicitRegInjector
           implicitRegInjector inst@(VisitExtprim res linImpls name args) = if contains impl (fromList $ externalLinearImplicits name)
               then map (\bind => [VisitExtprim res (insert impl bind linImpls) name args]) advanceRegBinding
               else pure [inst]
+          implicitRegInjector inst@(VisitStarkNetIntrinsic res linImpls intr args) = if contains impl (starkNetIntrinsicsNeededImplicits intr)
+              then map (\bind => [VisitStarkNetIntrinsic res (insert impl bind linImpls) intr args]) advanceRegBinding
+              else pure [inst]
           implicitRegInjector (VisitReturn res linImpls) = map (\(reg,_) => [VisitReturn res (insert impl reg linImpls)]) advanceRegBinding
           implicitRegInjector (VisitConBranch tag) = map (\(curReg, brReg) => [VisitConBranch tag, VisitAssign brReg curReg]) (enterBranch tag)
           implicitRegInjector (VisitConstBranch const) = map (\(curReg, brReg) => [VisitConstBranch const, VisitAssign brReg curReg]) (enterBranch const)
@@ -162,8 +173,9 @@ implicitRegTransformer neededByCall neededByApply impl = implicitRegInjector
 areAppliesAffected : LinearImplicit -> SortedSet LinearImplicit -> Bool
 areAppliesAffected = contains
 
-transformLinearImplicitDef : LinearImplicit -> SortedMap Name (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (Name, CairoDef) -> (Name, CairoDef)
-transformLinearImplicitDef impl functionImpls applyImpls def@(name, FunDef _ linImpls _ _) = if isJust (lookup impl linImpls)
+
+transformLinearImplicits : LinearImplicit -> SortedMap Name (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (Name, CairoDef) -> SortedMap LinearImplicit CairoReg -> (Name, CairoDef)
+transformLinearImplicits impl functionImpls applyImpls def@(name, _ ) linImpls = if isJust (lookup impl linImpls)
     then def -- is already present no need to inject
     else substituteDefRegisters substituteReg (snd result)
     where affectedCalls : SortedSet Name
@@ -173,12 +185,16 @@ transformLinearImplicitDef impl functionImpls applyImpls def@(name, FunDef _ lin
           transformer : InstVisit CairoReg -> Traversal RegTrackerState (List (InstVisit CairoReg))
           transformer = implicitRegTransformer affectedCalls areAppliesAffected impl
           initialState : RegTrackerState
-          initialState = MkRegTrackerState ((NamedParam (implicitName impl), ("implicit_" ++ (implicitName impl), 0))::Nil) empty
+          initialState = MkRegTrackerState ((CustomReg (implicitName impl) Nothing, ("implicit_" ++ (implicitName impl), 0))::Nil) empty
           result : (RegTrackerState, (Name, CairoDef))
           result = runVisitTransformCairoDef (rawTraversal transformer initialState) def
           substituteReg : CairoReg -> Maybe CairoReg
           -- call recursively to ensure we end up with the final substitution
           substituteReg reg = maybeMap (\r => fromMaybe r (substituteReg r)) (lookup reg (subst (fst result)))
+
+transformLinearImplicitDef : LinearImplicit -> SortedMap Name (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (Name, CairoDef) -> (Name, CairoDef)
+transformLinearImplicitDef impl functionImpls applyImpls def@(name, FunDef _ linImpls _ _) = transformLinearImplicits impl functionImpls applyImpls def linImpls
+transformLinearImplicitDef impl functionImpls applyImpls def@(name, ExtFunDef _ _ linImpls _ _) = transformLinearImplicits impl functionImpls applyImpls def linImpls
 transformLinearImplicitDef _ _ _ def = def
 
 transformDef : SortedMap Name (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (Name, CairoDef) -> (Name, CairoDef)

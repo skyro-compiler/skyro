@@ -14,70 +14,100 @@ import Data.SortedMap
 import Data.SortedSet
 import CommonDef
 
--- According to idris2 docs this should be in prelude but is not found
-public export
-thenCompare : Ordering -> Lazy Ordering -> Ordering
-thenCompare EQ ord = ord
-thenCompare ord _ = ord
-
 -- All the Constants
 public export
 data CairoConst : Type where
-    I : Int -> CairoConst
-    I8 : Int8 -> CairoConst
-    I16 : Int16 -> CairoConst
-    I32 : Int32 -> CairoConst
-    I64 : Int64 -> CairoConst
-    F : Integer -> CairoConst   -- F stands for Felt
-    BI : Integer -> CairoConst
-    B8 : Bits8 -> CairoConst
-    B16 : Bits16 -> CairoConst
-    B32 : Bits32 -> CairoConst
-    B64 : Bits64 -> CairoConst
-    Str : String -> CairoConst
-    Ch : Char -> CairoConst
-    IntType : CairoConst
-    Int8Type : CairoConst
-    Int16Type : CairoConst
-    Int32Type : CairoConst
-    Int64Type : CairoConst
+    I           : Int     -> CairoConst
+    I8          : Int8    -> CairoConst
+    I16         : Int16   -> CairoConst
+    I32         : Int32   -> CairoConst
+    I64         : Int64   -> CairoConst
+    F           : Integer -> CairoConst  -- F stands for Felt
+    BI          : Integer -> CairoConst  -- Big Integer
+    B8          : Bits8   -> CairoConst  -- Unsigned
+    B16         : Bits16  -> CairoConst
+    B32         : Bits32  -> CairoConst
+    B64         : Bits64  -> CairoConst
+    Str         : String  -> CairoConst
+    Ch          : Char    -> CairoConst
+    IntType     : CairoConst
+    Int8Type    : CairoConst
+    Int16Type   : CairoConst
+    Int32Type   : CairoConst
+    Int64Type   : CairoConst
+    FeltType    : CairoConst   -- Note: Only for internal use / idris will use another FeltType representation
     IntegerType : CairoConst
-    FeltType : CairoConst   -- Note: Only for internal use / idris will use another FeltType representation
-    Bits8Type : CairoConst
-    Bits16Type : CairoConst
-    Bits32Type : CairoConst
-    Bits64Type : CairoConst
-    StringType : CairoConst
-    CharType : CairoConst
+    Bits8Type   : CairoConst
+    Bits16Type  : CairoConst
+    Bits32Type  : CairoConst
+    Bits64Type  : CairoConst
+    StringType  : CairoConst
+    CharType    : CairoConst
+    TypeType    : CairoConst
 
--- The level indicates how deeply nested (in case statements) the register is defined
---  the levels can mostly be ignored but are really helpful if we want to eliminate unecessary assignements
-public export
-data CairoReg : Type where
-  Unassigned : Maybe String -> Int -> (level:Int) -> CairoReg   -- the unassigned level is dependent on the level of the let in the adt
-  Param : Int -> CairoReg                                       -- params are always level 0
-  NamedParam : String -> CairoReg
-  Local : Int -> (level:Int) -> CairoReg
-  Let : Int -> (level:Int) -> CairoReg
-  Temp : Int -> (level:Int) -> CairoReg
-  Const : CairoConst -> CairoReg                   -- constant values are always level 0
-  Eliminated : CairoReg                         -- eliminated ones do not exist, no level needed
+export
+typeOfConst : CairoConst -> CairoConst
+typeOfConst (I   _) = IntType
+typeOfConst (I8  _) = Int8Type
+typeOfConst (I16 _) = Int16Type
+typeOfConst (I32 _) = Int32Type
+typeOfConst (I64 _) = Int64Type
+typeOfConst (F   _) = FeltType
+typeOfConst (BI  _) = IntegerType
+typeOfConst (B8  _) = Bits8Type
+typeOfConst (B16 _) = Bits16Type
+typeOfConst (B32 _) = Bits32Type
+typeOfConst (B64 _) = Bits64Type
+typeOfConst (Str _) = StringType
+typeOfConst (Ch  _) = CharType
+typeOfConst _ = TypeType
 
+mutual
+  public export
+  data ElimTracker : Type where
+    Replacement : CairoReg -> ElimTracker
+    Unreachable : ElimTracker
+    Disjoint : ElimTracker
+    Null : ElimTracker
+    Other : String -> ElimTracker
+
+  -- The level indicates how deeply nested (in case statements) the register is defined
+  --  the levels can mostly be ignored but are really helpful if we want to eliminate unecessary assignements
+  public export
+  data CairoReg : Type where
+    -- Maybe String for Name conflict resolutions, as a helper
+    -- Not yet decided which Register type
+    Unassigned  : Maybe String -> Int -> (level:Int) -> CairoReg  -- the unassigned level is dependent on the level of the let in the adt
+    Param       : Int                                -> CairoReg  -- params are always level 0
+    CustomReg   : String -> Maybe String             -> CairoReg  -- This should only be used in generated functions (and not in User defined functions)
+    -- Locals are relative to [fp] and thus cannot be revoked.
+    Local       : Int                 -> (level:Int) -> CairoReg
+    -- Let works as a reference - the Cairo compiler replaces it with the appropriate, possibly differing, value at referenced positions.
+    Let         : Int                 -> (level:Int) -> CairoReg
+    -- Tempvars reserve a cell at [ap] for a value, and then define a let referencing it.
+    Temp        : Int                 -> (level:Int) -> CairoReg
+    Const       : CairoConst                         -> CairoReg  -- ^ constant values are always level 0
+    Eliminated  : ElimTracker                        -> CairoReg  -- eliminated ones do not exist, no level needed, result in a value of 0?
+
+export
+debugElimination : String -> CairoReg
+debugElimination s = (Eliminated (Other s))
 
 -- All the internal operators
 public export
 data CairoPrimFn : Type where
-     Add : (ty : CairoConst) -> CairoPrimFn
-     Sub : (ty : CairoConst) -> CairoPrimFn
-     Mul : (ty : CairoConst) -> CairoPrimFn
-     Div : (ty : CairoConst) -> CairoPrimFn
-     Mod : (ty : CairoConst) -> CairoPrimFn
-     Neg : (ty : CairoConst) -> CairoPrimFn
+     -- The ty identifies the types at which this is applied
+     Add    : (ty : CairoConst) -> CairoPrimFn
+     Sub    : (ty : CairoConst) -> CairoPrimFn
+     Mul    : (ty : CairoConst) -> CairoPrimFn
+     Div    : (ty : CairoConst) -> CairoPrimFn
+     Mod    : (ty : CairoConst) -> CairoPrimFn
+     Neg    : (ty : CairoConst) -> CairoPrimFn
      ShiftL : (ty : CairoConst) -> CairoPrimFn
      ShiftR : (ty : CairoConst) -> CairoPrimFn
 
      BAnd : (ty : CairoConst) -> CairoPrimFn
-     BOr : (ty : CairoConst) -> CairoPrimFn
+     BOr  : (ty : CairoConst) -> CairoPrimFn
      BXOr : (ty : CairoConst) -> CairoPrimFn
 
      LT  : (ty : CairoConst) -> CairoPrimFn
@@ -86,27 +116,29 @@ data CairoPrimFn : Type where
      GTE : (ty : CairoConst) -> CairoPrimFn
      GT  : (ty : CairoConst) -> CairoPrimFn
 
-     Cast : CairoConst -> CairoConst -> CairoPrimFn
-     BelieveMe : CairoPrimFn
-     Crash : CairoPrimFn
+     Cast      : CairoConst -> CairoConst -> CairoPrimFn
+     -- Unsafe cast operation
+     BelieveMe :                             CairoPrimFn
+     Crash     :                             CairoPrimFn
 
 public export
 data Import : Type where
-  MkImport : String -> String -> Import
+  MkImport : (ns: String) -> (name: String) -> (as:Maybe String) -> Import
 
 public export
 Show Import where
-  show (MkImport modulename function) = 
-    "from " ++ modulename ++ " import " ++ function
+  show (MkImport modulename function Nothing) =  "from " ++ modulename ++ " import " ++ function
+  show (MkImport modulename function (Just rename)) =  "from " ++ modulename ++ " import " ++ function ++ " as "++ rename
+
 
 public export
 Eq Import where
-  MkImport ns1 f1 == MkImport ns2 f2 = ns1 == ns2 && f1 == f2
+  MkImport ns1 f1 r1== MkImport ns2 f2 r2 = ns1 == ns2 && f1 == f2 && r1 == r2
 
 public export
 Ord Import where
-  compare (MkImport ns1 f1) (MkImport ns2 f2) = 
-    thenCompare (compare ns1 ns2) (compare f1 f2)
+  compare (MkImport ns1 f1 r1) (MkImport ns2 f2 r2) =
+    thenCompare (compare ns1 ns2) (thenCompare (compare f1 f2) (compare r1 r2))
 
 -- Short for: Value Independent Linear Implicit
 -- Value Independent : An inst using a Linear Implicit must have a semantic independent of the concrete value of the implicit (as long as it is a valid one)
@@ -122,21 +154,48 @@ LinearImplicitArgs : Type
 LinearImplicitArgs = SortedMap LinearImplicit (CairoReg, CairoReg) -- (param, return)
 
 public export
+data StarkNetIntrinsic = StorageVarAddr Name
+                       | EventSelector Name
+
+public export
 data CairoInst : Type where
-     ASSIGN : (res:CairoReg) -> CairoReg -> CairoInst
-     MKCON : (res:CairoReg) -> Maybe Int -> (args : List CairoReg) -> CairoInst
-     MKCLOSURE : (res:CairoReg) -> Name -> (missing : Nat) -> (args : List CairoReg) -> CairoInst
-     APPLY : (res:CairoReg) -> LinearImplicitArgs -> (f : CairoReg) -> (a : CairoReg) -> CairoInst
-     MKCONSTANT : (res:CairoReg) -> CairoConst -> CairoInst
-     CALL : (res:List CairoReg) -> LinearImplicitArgs -> Name -> (args : List CairoReg) -> CairoInst
-     OP : (res:CairoReg) -> LinearImplicitArgs -> CairoPrimFn -> List CairoReg -> CairoInst
-     EXTPRIM : List CairoReg -> LinearImplicitArgs -> Name -> List CairoReg -> CairoInst
-     CASE : CairoReg -> (alts : List (Int, List CairoInst)) -> (def : Maybe (List CairoInst)) -> CairoInst
-     CONSTCASE : CairoReg -> (alts : List (CairoConst, List CairoInst)) -> (def : Maybe (List CairoInst)) -> CairoInst
-     PROJECT : (res:CairoReg) -> (value : CairoReg) -> (pos : Nat) -> CairoInst
-     RETURN : List CairoReg -> SortedMap LinearImplicit CairoReg -> CairoInst
-     NULL : (res:CairoReg) -> CairoInst
-     ERROR : (res:CairoReg) -> String -> CairoInst
+    -- Assign from register to register
+    ASSIGN     : (res : CairoReg)      -> CairoReg   -> CairoInst
+    -- Assign a constant to a register
+    MKCONSTANT : (res : CairoReg)      -> CairoConst -> CairoInst
+
+    -- Execute the Operator
+    OP : (res : CairoReg)      -> LinearImplicitArgs                         -> CairoPrimFn                    -> List CairoReg          -> CairoInst
+
+    -- Represents a constructor call, not the definition, with the given tag and the arguments
+    MKCON   : (res : CairoReg)      -> (tag:Maybe Int)                            -> (args : List CairoReg)                                   -> CairoInst
+    -- Extract a value from a constructor `value` at position `pos` into `res`
+    PROJECT : (res : CairoReg)      -> (value : CairoReg)                         -> (pos : Nat)                                              -> CairoInst
+
+    -- Construct a closure for the given Name, with `missing` args missing and `args` as the applied arguments.
+    MKCLOSURE         : (res : CairoReg)      -> Name               -> (missing : Nat)   -> (args : List CairoReg) -> CairoInst
+    -- Apply one value to the function dynamically, creating a new closure or the result.
+    -- Linear implicits get threaded through every time, but only used in the last call.
+    APPLY             : (res : CairoReg)      -> LinearImplicitArgs -> (fun : CairoReg)  -> (arg  :      CairoReg) -> CairoInst
+    -- Call function and assign results to `res`.
+    CALL              : (res : List CairoReg) -> LinearImplicitArgs -> Name              -> (args : List CairoReg) -> CairoInst
+    -- Call an external primitive presented by the backend.
+    EXTPRIM           : (res : List CairoReg) -> LinearImplicitArgs -> Name              -> (args : List CairoReg) -> CairoInst
+    -- Access an intrinsic by its name
+    STARKNETINTRINSIC : (res : CairoReg)      -> LinearImplicitArgs -> StarkNetIntrinsic -> (args : List CairoReg) -> CairoInst
+
+    -- Implicit constraints: `alts`s must be covering if `def` empty; if `alts` empty `def` may not be empty.
+    -- Case statement with alternatives, and maybe a default case
+    CASE      : CairoReg      -> (alts : List (Int, List CairoInst))        -> (def : Maybe (List CairoInst)) -> CairoInst
+    -- Case statement on a constant (on primitives, e.g. Nat)
+    CONSTCASE : CairoReg      -> (alts : List (CairoConst, List CairoInst)) -> (def : Maybe (List CairoInst)) -> CairoInst
+    -- Return the list of values, including the registers for the implicits at the end. Must be in tail position.
+    RETURN    : List CairoReg -> SortedMap LinearImplicit CairoReg                                            -> CairoInst
+
+    -- Generate an irrelevant value. e.g. used for erased types, or for unused parameters in a closure
+    NULL  : (res : CairoReg)           -> CairoInst
+    -- Crash, but with message (implemented as hint). Register unused but "consumed" for invariant across branches.
+    ERROR : (res : CairoReg) -> String -> CairoInst
 
 export
 implicitName : LinearImplicit -> String
@@ -144,7 +203,7 @@ implicitName (MKLinearImplicit name) = name
 
 export
 implicitReg : LinearImplicit -> CairoReg
-implicitReg impl = NamedParam (implicitName impl)
+implicitReg impl = CustomReg (implicitName impl) Nothing -- (Just "felt*")
 
 public export
 Eq LinearImplicit where
@@ -194,10 +253,12 @@ Ord LinearImplicit where
       linearImplicitOrder (MKLinearImplicit "bitwise_ptr") = 5
       linearImplicitOrder i = assert_total $ idris_crash $ "Unknown implicit: " ++ show i
 
+-- Annotation for foreign functions that return multiple values.
+-- This helps evading unecessary wrapping since Idris only allows single unwrapped return values.
 public export
 data TupleStructure : Type where
- Tupled : (tag: Int) -> List TupleStructure -> TupleStructure
- ReturnValue : TupleStructure
+  Tupled      : (tag: Int) -> List TupleStructure -> TupleStructure
+  ReturnValue : TupleStructure
 
 public export
 Show TupleStructure where
@@ -213,6 +274,7 @@ Eq TupleStructure where
 public export
 record ForeignInfo where
     constructor MkForeignInfo
+    -- Is the change to the value of `ap` statically known.
     isApStable: Bool
     untupledSig: Maybe TupleStructure
     implicits: List LinearImplicit
@@ -225,8 +287,10 @@ Eq ForeignInfo where
 
 public export
 data CairoDef : Type where
-     FunDef : (params : List CairoReg) -> (implicits: SortedMap LinearImplicit CairoReg) -> (rets: List String) -> List CairoInst -> CairoDef
+     FunDef : (params : List CairoReg) -> (implicits: SortedMap LinearImplicit CairoReg) -> (rets: List CairoReg) -> List CairoInst -> CairoDef
      ForeignDef : (info : ForeignInfo) -> (args:Nat) -> (rets:Nat) -> CairoDef
+     ExtFunDef : (tags : List String) -> (params : List CairoReg) -> (implicits: SortedMap LinearImplicit CairoReg) -> (rets: List CairoReg) -> List CairoInst -> CairoDef
+
 
 public export
 CairoCodePass : Type
@@ -260,6 +324,7 @@ Show CairoConst where
   show Bits64Type = "Bits64Type"
   show StringType = "StringType"
   show CharType = "CharType"
+  show TypeType = "TypeType"
 
 export
 Show CairoPrimFn where
@@ -303,6 +368,7 @@ Eq CairoConst where
     (==) Int16Type Int16Type = True
     (==) Int32Type Int32Type = True
     (==) Int64Type Int64Type = True
+    (==) FeltType FeltType = True
     (==) IntegerType IntegerType = True
     (==) Bits8Type Bits8Type = True
     (==) Bits16Type Bits16Type = True
@@ -310,6 +376,7 @@ Eq CairoConst where
     (==) Bits64Type Bits64Type = True
     (==) StringType StringType = True
     (==) CharType CharType = True
+    (==) TypeType TypeType = True
     (==) _ _ = False
 
 public export
@@ -378,6 +445,7 @@ Ord CairoConst where
               dataOrder Bits64Type = 23
               dataOrder StringType = 24
               dataOrder CharType = 25
+              dataOrder TypeType = 26
 
 
 public export
@@ -422,42 +490,59 @@ Ord CairoPrimFn where
               dataOrder Crash = 18
 
 public export
+Show CairoReg where
+  show (Unassigned Nothing i d) = "Unassigned_" ++ show i ++ "(" ++ show d ++ ")"
+  show (Unassigned (Just s) i d) = "Unassigned_" ++ s ++ "_" ++ show i ++ "(" ++ show d ++ ")"
+  show (Param i) = "Param_" ++ show i
+  show (CustomReg n _) = n
+  show (Local i d) = "Local_" ++ show i ++ "(" ++ show d ++ ")"
+  show (Let i d) = "Let_" ++ show i ++ "(" ++ show d ++ ")"
+  show (Temp i d) = "Temp_" ++ show i ++ "(" ++ show d ++ ")"
+  show (Const s) = "Const_" ++ show s
+  show (Eliminated (Replacement reg@(Eliminated _))) = show reg
+  show (Eliminated (Replacement reg)) = "Eliminated: " ++ (show reg)
+  show (Eliminated Unreachable) = "Eliminated: Out of Scope"
+  show (Eliminated Disjoint) = "Eliminated: No shared source"
+  show (Eliminated Null) = "Null"
+  show (Eliminated (Other s)) = "Eliminated: " ++ s
+
+public export
 Eq CairoReg where
   (==) (Unassigned p1 i1 d1) (Unassigned p2 i2 d2) = p1 == p2 && i1 == i2 && d1 == d2
   (==) (Param i1) (Param i2) = i1 == i2
-  (==) (NamedParam n1) (NamedParam n2) = n1 == n2
+  (==) (CustomReg n1 _) (CustomReg n2 _) = n1 == n2
   (==) (Local i1 d1) (Local i2 d2) = d1 == d2 && i1 == i2
   (==) (Let i1 d1) (Let i2 d2) = d1 == d2 && i1 == i2
   (==) (Temp i1 d1) (Temp i2 d2) = d1 == d2 && i1 == i2
   (==) (Const s1) (Const s2) = s1 == s2
-  (==) Eliminated Eliminated = True
+  (==) (Eliminated _) (Eliminated _) = True
   (==) _ _ = False
 
 -- These with highest lifetime expectancy come first
 dataOrder : CairoReg -> Int
 dataOrder (Const _) = 0             -- Constants never become unreachable
-dataOrder (NamedParam _) = 1        -- Params are reachable in the whole body
+dataOrder (CustomReg _ _) = 1       -- Params are reachable in the whole body
 dataOrder (Param _) = 2             -- Params are reachable in the whole body
 dataOrder (Local _ _) = 3           -- After assigned Locals are reachable in the whole body
 dataOrder (Unassigned _ _ _) = 4    -- Unassigned have the potential to become Local or Const (but could be placed everywhere)
 dataOrder (Temp _ _) = 5            -- Just reachable in the current AP region
 dataOrder (Let _ _) = 6             -- Same as Temp. However, using multiple times is expensive
-dataOrder Eliminated = 7            -- This is never reachable
+dataOrder (Eliminated _) = 7        -- This is never reachable
 
 -- These with highest lifetime expectancy come first
 -- Note: StaticOptimizer relies on this order (to be most effective that is)
 public export
 Ord CairoReg where
   -- First handle the special cases without dept and index
-  compare Eliminated Eliminated = EQ
-  compare Eliminated _ = GT
-  compare _ Eliminated = LT
+  compare (Eliminated _) (Eliminated _) = EQ
+  compare (Eliminated _) _ = GT
+  compare _ (Eliminated _) = LT
   compare (Const c1) (Const c2) = compare c1 c2
   compare (Const _) _ = LT
   compare _ (Const _) = GT
-  compare (NamedParam n1) (NamedParam n2) = compare n1 n2
-  compare (NamedParam _) _ = LT
-  compare _ (NamedParam _) = GT
+  compare (CustomReg n1 _) (CustomReg n2 _) = compare n1 n2
+  compare (CustomReg _ _) _ = LT
+  compare _ (CustomReg _ _) = GT
   -- then handle the general case with depth and index
   compare a b = thenCompare
         (compare (depth a) (depth b))
@@ -470,7 +555,7 @@ Ord CairoReg where
           depth (Local _ d) = d
           depth (Temp _ d) = d
           depth (Let _ d) = d
-          depth _ = -1
+          depth r = assert_total $ idris_crash ("reg "++(show r)++" has no depth")
           -- Tie Breaker
           tiebreaker : CairoReg -> CairoReg -> Ordering
           tiebreaker (Param i1) (Param i2) = compare i1 i2
@@ -478,23 +563,29 @@ Ord CairoReg where
           tiebreaker (Local i1 _) (Local i2 _) = compare i1 i2
           tiebreaker (Temp i1 _) (Temp i2 _) = compare i1 i2
           tiebreaker (Let i1 _) (Let i2 _) = compare i1 i2
-          tiebreaker _ _ = EQ -- just to please idris2
+          tiebreaker _ _ = assert_total $ idris_crash "Should Not Happen"
 
 public export
-Show CairoReg where
-  show (Unassigned Nothing i d) = "Unassigned_" ++ show i ++ "(" ++ show d ++ ")"
-  show (Unassigned (Just s) i d) = "Unassigned_" ++ s ++ "_" ++ show i ++ "(" ++ show d ++ ")"
-  show (Param i) = "Param_" ++ show i
-  show (NamedParam n) = n
-  show (Local i d) = "Local_" ++ show i ++ "(" ++ show d ++ ")"
-  show (Let i d) = "Let_" ++ show i ++ "(" ++ show d ++ ")"
-  show (Temp i d) = "Temp_" ++ show i ++ "(" ++ show d ++ ")"
-  show (Const s) = "Const_" ++ show s
-  show Eliminated = "Eliminated"
+Eq StarkNetIntrinsic where
+  (==) (StorageVarAddr n1) (StorageVarAddr n2) = n1 == n2
+  (==) (EventSelector n1) (EventSelector n2) = n1 == n2
+  (==) _ _ = False
+
+
+public export
+Ord StarkNetIntrinsic where
+    compare (StorageVarAddr n1) (StorageVarAddr n2) = compare n1 n2
+    compare (EventSelector n1) (EventSelector n2) = compare n1 n2
+    compare i1 i2 = compare (order i1) (order i2)
+    where order : StarkNetIntrinsic -> Int
+          order (StorageVarAddr _) = 0
+          order (EventSelector _) = 1
+
 
 public export
 Eq CairoInst where
   (==) (ASSIGN r1 c1) (ASSIGN r2 c2) = r1 == r2 && c1 == c2
+  (==) (STARKNETINTRINSIC r1 i1 inter1 a1) (STARKNETINTRINSIC r2 i2 inter2 a2) = r1 == r2 && i1 == i2 && inter1 == inter2 && a1 == a2
   (==) (MKCON r1 t1 a1) (MKCON r2 t2 a2) = r1 == r2 && t1 == t2 && a1 == a2
   (==) (MKCLOSURE r1 n1 m1 a1) (MKCLOSURE r2 n2 m2 a2) = r1 == r2 && n1 == n2 && m1 == m2 && a1 == a2
   (==) (APPLY r1 i1 f1 a1) (APPLY r2 i2 f2 a2) = r1 == r2 && i1 == i2 &&  f1 == f2 && a1 == a2
@@ -510,10 +601,15 @@ Eq CairoInst where
   (==) (ERROR r1 m1) (ERROR r2 m2) = r1 == r2 && m1 == m2
   (==) _ _ = False
 
+public export
+Show StarkNetIntrinsic where
+  show (StorageVarAddr n) = "StorageVarAddr(\{show n})"
+  show (EventSelector n) = "EventSelector(\{show n})"
 
 public export
 Show CairoInst where
   show (ASSIGN r c) = "ASSIGN \{show r} \{show c}"
+  show (STARKNETINTRINSIC r i inter a) = "STARKNETINTRINSIC \{show r} \{show $ SortedMap.toList i} \{show inter} \{show a}"
   show (MKCON r t a) = "MKCON \{show r} \{show t} \{show a}"
   show (MKCLOSURE r n m a) = "MKCLOSURE \{show r} \{show n} \{show m} \{show a}"
   show (APPLY r i f a) = "APPLY \{show r} \{show $ SortedMap.toList i} \{show f} \{show a}"
@@ -532,23 +628,29 @@ public export
 Eq CairoDef where
   (==) (FunDef p1 i1 r1 b1) (FunDef p2 i2 r2 b2) = p1 == p2  && i1 == i2 && r1 == r2 && assert_total (b1 == b2)
   (==) (ForeignDef i1 a1 r1) (ForeignDef i2 a2 r2) = i1 == i2 && a1 == a2 && r1 == r2
+  (==) (ExtFunDef t1 p1 i1 r1 b1) (ExtFunDef t2 p2 i2 r2 b2) = t1 == t2 && p1 == p2  && i1 == i2 && r1 == r2 && assert_total (b1 == b2)
   (==) _ _ = False
 
 public export
 Show CairoDef where
-  show (FunDef p i r b) = "(\{showSep "," (map show p)}){\{showSep "," (map (\(i,r) => (show i) ++ "@" ++ (show r)) (SortedMap.toList i))}} -> (\{showSep "," r}){\n\{showSep "\n" (map show b)}\n}"
-  show (ForeignDef _ _ _) = "Foreign" -- Todo:
+  show (FunDef p i r b) = "(\{showSep "," (map show p)}){\{showSep "," (map (\(i,r) => (show i) ++ "@" ++ (show r)) (SortedMap.toList i))}} -> (\{showSep "," (map show r)}){\n\{showSep "\n" (map show b)}\n}"
+  show (ExtFunDef t p i r b) = "{\{showSep "," t} \{showSep "," (map (\(i,r) => (show i) ++ "@" ++ (show r)) (SortedMap.toList i))}}(\{showSep "," (map show p)}):(\{showSep "," (map show r)}){\n\{showSep "\n" (map show b)}\n}"
+  -- Todo: Code
+  show (ForeignDef (MkForeignInfo isApStable untupledSig implicits imports code) args rets) = "Foreign (\{show args}->\{show rets}) \{show isApStable} \{show untupledSig} \{show implicits} \{show imports} (code not represented)"
 
 resolveIndex : SortedMap Int CairoReg -> Int -> CairoReg
 resolveIndex subs i = fromMaybe (assert_total $ idris_crash "No Cairo Register bound for ANF Local") (lookup i subs)
 
 resolveReg : SortedMap Int CairoReg -> AVar -> CairoReg
 resolveReg subs (ALocal i) = resolveIndex subs i
-resolveReg _ ANull = Eliminated
+resolveReg _ ANull = Eliminated Null
 
+-- When generating instructions, this defines where the last instruction of a block should store its result.
 data Result : Type where
-   Return : Result
-   Assign : CairoReg -> Result
+  -- Currently evaluating a whole function          -> The value will be returned
+  Return : Result
+  -- Currently evaluation a block inside a function -> Assign to a register instead of returning
+  Assign : CairoReg -> Result
 
 produceResult : (Int,Int) -> Result -> (CairoReg -> CairoInst) -> (Int, List CairoInst)
 produceResult (nextReg, _) (Assign c) f = (nextReg, [f c])
@@ -560,6 +662,22 @@ projectArgs : CairoReg -> Nat -> (fields : List CairoReg) -> List CairoInst
 projectArgs src i [] = []
 projectArgs src i (field :: fields) = (PROJECT field src i)::(projectArgs src (i + 1) fields)
 
+fromANFPrimType : PrimType -> CairoConst
+fromANFPrimType StringType = StringType
+fromANFPrimType CharType = CharType
+fromANFPrimType IntType = IntType
+fromANFPrimType Int8Type = Int8Type
+fromANFPrimType Int16Type = Int16Type
+fromANFPrimType Int32Type = Int32Type
+fromANFPrimType Int64Type = Int64Type
+fromANFPrimType IntegerType = IntegerType
+fromANFPrimType Bits8Type = Bits8Type
+fromANFPrimType Bits16Type = Bits16Type
+fromANFPrimType Bits32Type = Bits32Type
+fromANFPrimType Bits64Type = Bits64Type
+fromANFPrimType _ = assert_total $ idris_crash "Unsupported PrimType"
+
+-- Convert constants. Doubles, DoubleType and WorldType are not supported.
 fromANFConst : Constant -> CairoConst
 fromANFConst (I a) = I a
 fromANFConst (I8 a) = I8 a
@@ -575,174 +693,214 @@ fromANFConst (Str a) = Str a
 fromANFConst (Ch a) = Ch a
 -- Sadly this one appears in MainExpr so we need to translate or throw main expr & co. out early
 fromANFConst WorldVal = Str "WorldVal"
-fromANFConst IntType = IntType
-fromANFConst Int8Type = Int8Type
-fromANFConst Int16Type = Int16Type
-fromANFConst Int32Type = Int32Type
-fromANFConst Int64Type = Int64Type
-fromANFConst IntegerType = IntegerType
-fromANFConst Bits8Type = Bits8Type
-fromANFConst Bits16Type = Bits16Type
-fromANFConst Bits32Type = Bits32Type
-fromANFConst Bits64Type = Bits64Type
-fromANFConst StringType = StringType
-fromANFConst CharType = CharType
+fromANFConst (PrT prt) = fromANFPrimType prt
 fromANFConst _ = assert_total $ idris_crash "Unsupported Constant type"
+
+-- Convert ANF Primitive function/operator, dropping the arity information.
 
 %hide Core.Context.Context.Constructor.arity
 -- TODO take FC for more precise error reporting
 fromANFPrimFn : PrimFn arity -> Core CairoPrimFn
-fromANFPrimFn (Add a) = pure (Add $ fromANFConst a)
-fromANFPrimFn (Sub a) = pure (Sub $ fromANFConst a)
-fromANFPrimFn (Mul a) = pure (Mul $ fromANFConst a)
-fromANFPrimFn (Div a) = pure (Div $ fromANFConst a)
-fromANFPrimFn (Mod a) = pure (Mod $ fromANFConst a)
-fromANFPrimFn (Neg a) = pure (Neg $ fromANFConst a)
-fromANFPrimFn (ShiftL a) = pure (ShiftL $ fromANFConst a)
-fromANFPrimFn (ShiftR a) = pure (ShiftR $ fromANFConst a)
-fromANFPrimFn (BAnd a) = pure (BAnd $ fromANFConst a)
-fromANFPrimFn (BOr a) = pure (BOr $ fromANFConst a)
-fromANFPrimFn (BXOr a) = pure (BXOr $ fromANFConst a)
-fromANFPrimFn (LT a) = pure (LT $ fromANFConst a)
-fromANFPrimFn (LTE a) = pure (LTE $ fromANFConst a)
-fromANFPrimFn (EQ a) = pure (EQ $ fromANFConst a)
-fromANFPrimFn (GTE a) = pure (GTE $ fromANFConst a)
-fromANFPrimFn (GT a) = pure (GT $ fromANFConst a)
-fromANFPrimFn (Cast a b) = pure (Cast (fromANFConst a) (fromANFConst b))
+fromANFPrimFn (Add a) = pure (Add $ fromANFPrimType a)
+fromANFPrimFn (Sub a) = pure (Sub $ fromANFPrimType a)
+fromANFPrimFn (Mul a) = pure (Mul $ fromANFPrimType a)
+fromANFPrimFn (Div a) = pure (Div $ fromANFPrimType a)
+fromANFPrimFn (Mod a) = pure (Mod $ fromANFPrimType a)
+fromANFPrimFn (Neg a) = pure (Neg $ fromANFPrimType a)
+fromANFPrimFn (ShiftL a) = pure (ShiftL $ fromANFPrimType a)
+fromANFPrimFn (ShiftR a) = pure (ShiftR $ fromANFPrimType a)
+fromANFPrimFn (BAnd a) = pure (BAnd $ fromANFPrimType a)
+fromANFPrimFn (BOr a) = pure (BOr $ fromANFPrimType a)
+fromANFPrimFn (BXOr a) = pure (BXOr $ fromANFPrimType a)
+fromANFPrimFn (LT a) = pure (LT $ fromANFPrimType a)
+fromANFPrimFn (LTE a) = pure (LTE $ fromANFPrimType a)
+fromANFPrimFn (EQ a) = pure (EQ $ fromANFPrimType a)
+fromANFPrimFn (GTE a) = pure (GTE $ fromANFPrimType a)
+fromANFPrimFn (GT a) = pure (GT $ fromANFPrimType a)
+fromANFPrimFn (Cast a b) = pure (Cast (fromANFPrimType a) (fromANFPrimType b))
 fromANFPrimFn (BelieveMe) = pure BelieveMe
 fromANFPrimFn (Crash) = pure Crash
 fromANFPrimFn f = throw (UserError ("PrimFn " ++ show f ++ " is not supported"))
 
+
+-- splitLast '_' "abc_efg_hij" = Just ("abc_efg", "hij")
+-- splitLast '_' "abc_efg_hij" = Just ("abc_efg", "hij")
+splitLast : Char -> String -> Maybe (String, String)
+splitLast sep string = 
+  case break (== sep) (reverse string) of
+    (suffix, pref) =>
+      case strM pref of
+        (StrNil) => Nothing
+        (StrCons _ rest) => Just (reverse rest, reverse suffix)
+
+
+-- %extern definitions, used in the Cairo stdlib for casts and operations on Felt elements.
 fromANFExtPrim : Name -> CairoReg -> List CairoReg -> CairoInst
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int_to_Felt")) res args = OP res empty (Cast IntType FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int8_to_Felt")) res args = OP res empty (Cast Int8Type FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int16_to_Felt")) res args = OP res empty (Cast Int16Type FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int32_to_Felt")) res args = OP res empty (Cast Int32Type FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int64_to_Felt")) res args = OP res empty (Cast Int64Type FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits8_to_Felt")) res args = OP res empty (Cast Bits8Type FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits16_to_Felt")) res args = OP res empty (Cast Bits16Type FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits32_to_Felt")) res args = OP res empty (Cast Bits32Type FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits64_to_Felt")) res args = OP res empty (Cast Bits64Type FeltType) args
+fromANFExtPrim (NS ns (UN $ Basic name)) res args = 
+  case show ns of
+    "Common.Casts" => 
+      case name of
+        "prim__cast_Int_to_Felt" => OP res empty (Cast IntType FeltType) args
+        "prim__cast_Int8_to_Felt" => OP res empty (Cast Int8Type FeltType) args
+        "prim__cast_Int16_to_Felt" => OP res empty (Cast Int16Type FeltType) args
+        "prim__cast_Int32_to_Felt" => OP res empty (Cast Int32Type FeltType) args
+        "prim__cast_Int64_to_Felt" => OP res empty (Cast Int64Type FeltType) args
+        "prim__cast_Integer_to_Felt" => OP res empty (Cast IntegerType FeltType) args
+        "prim__cast_Bits8_to_Felt" => OP res empty (Cast Bits8Type FeltType) args
+        "prim__cast_Bits16_to_Felt" => OP res empty (Cast Bits16Type FeltType) args
+        "prim__cast_Bits32_to_Felt" => OP res empty (Cast Bits32Type FeltType) args
+        "prim__cast_Bits64_to_Felt" => OP res empty (Cast Bits64Type FeltType) args
 
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Felt_to_Int")) res args = OP res empty (Cast FeltType IntType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int8_to_Int")) res args = OP res empty (Cast Int8Type IntType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int16_to_Int")) res args = OP res empty (Cast Int16Type IntType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int32_to_Int")) res args = OP res empty (Cast Int32Type IntType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int64_to_Int")) res args = OP res empty (Cast Int64Type IntType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits8_to_Int")) res args = OP res empty (Cast Bits8Type IntType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits16_to_Int")) res args = OP res empty (Cast Bits16Type IntType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits32_to_Int")) res args = OP res empty (Cast Bits32Type IntType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits64_to_Int")) res args = OP res empty (Cast Bits64Type IntType) args
+        "prim__cast_Felt_to_Int" => OP res empty (Cast FeltType IntType) args
+        "prim__cast_Int8_to_Int" => OP res empty (Cast Int8Type IntType) args
+        "prim__cast_Int16_to_Int" => OP res empty (Cast Int16Type IntType) args
+        "prim__cast_Int32_to_Int" => OP res empty (Cast Int32Type IntType) args
+        "prim__cast_Int64_to_Int" => OP res empty (Cast Int64Type IntType) args
+        "prim__cast_Integer_to_Int" => OP res empty (Cast IntegerType IntType) args
+        "prim__cast_Bits8_to_Int" => OP res empty (Cast Bits8Type IntType) args
+        "prim__cast_Bits16_to_Int" => OP res empty (Cast Bits16Type IntType) args
+        "prim__cast_Bits32_to_Int" => OP res empty (Cast Bits32Type IntType) args
+        "prim__cast_Bits64_to_Int" => OP res empty (Cast Bits64Type IntType) args
 
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Felt_to_Int8")) res args = OP res empty (Cast FeltType Int8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int_to_Int8")) res args = OP res empty (Cast IntType Int8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int16_to_Int8")) res args = OP res empty (Cast Int16Type Int8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int32_to_Int8")) res args = OP res empty (Cast Int32Type Int8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int64_to_Int8")) res args = OP res empty (Cast Int64Type Int8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits8_to_Int8")) res args = OP res empty (Cast Bits8Type Int8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits16_to_Int8")) res args = OP res empty (Cast Bits16Type Int8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits32_to_Int8")) res args = OP res empty (Cast Bits32Type Int8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits64_to_Int8")) res args = OP res empty (Cast Bits64Type Int8Type) args
+        "prim__cast_Felt_to_Int8" => OP res empty (Cast FeltType Int8Type) args
+        "prim__cast_Int_to_Int8" => OP res empty (Cast IntType Int8Type) args
+        "prim__cast_Int16_to_Int8" => OP res empty (Cast Int16Type Int8Type) args
+        "prim__cast_Int32_to_Int8" => OP res empty (Cast Int32Type Int8Type) args
+        "prim__cast_Int64_to_Int8" => OP res empty (Cast Int64Type Int8Type) args
+        "prim__cast_Integer_to_Int8" => OP res empty (Cast IntegerType Int8Type) args
+        "prim__cast_Bits8_to_Int8" => OP res empty (Cast Bits8Type Int8Type) args
+        "prim__cast_Bits16_to_Int8" => OP res empty (Cast Bits16Type Int8Type) args
+        "prim__cast_Bits32_to_Int8" => OP res empty (Cast Bits32Type Int8Type) args
+        "prim__cast_Bits64_to_Int8" => OP res empty (Cast Bits64Type Int8Type) args
+      
+        "prim__cast_Felt_to_Int16" => OP res empty (Cast FeltType Int16Type) args
+        "prim__cast_Int_to_Int16" => OP res empty (Cast IntType Int16Type) args
+        "prim__cast_Int8_to_Int16" => OP res empty (Cast Int8Type Int16Type) args
+        "prim__cast_Int32_to_Int16" => OP res empty (Cast Int32Type Int16Type) args
+        "prim__cast_Int64_to_Int16" => OP res empty (Cast Int64Type Int16Type) args
+        "prim__cast_Integer_to_Int16" => OP res empty (Cast IntegerType Int16Type) args
+        "prim__cast_Bits8_to_Int16" => OP res empty (Cast Bits8Type Int16Type) args
+        "prim__cast_Bits16_to_Int16" => OP res empty (Cast Bits16Type Int16Type) args
+        "prim__cast_Bits32_to_Int16" => OP res empty (Cast Bits32Type Int16Type) args
+        "prim__cast_Bits64_to_Int16" => OP res empty (Cast Bits64Type Int16Type) args
+      
+        "prim__cast_Felt_to_Int32" => OP res empty (Cast FeltType Int32Type) args
+        "prim__cast_Int_to_Int32" => OP res empty (Cast IntType Int32Type) args
+        "prim__cast_Int8_to_Int32" => OP res empty (Cast Int8Type Int32Type) args
+        "prim__cast_Int16_to_Int32" => OP res empty (Cast Int16Type Int32Type) args
+        "prim__cast_Int64_to_Int32" => OP res empty (Cast Int64Type Int32Type) args
+        "prim__cast_Integer_to_Int32" => OP res empty (Cast IntegerType Int32Type) args
+        "prim__cast_Bits8_to_Int32" => OP res empty (Cast Bits8Type Int32Type) args
+        "prim__cast_Bits16_to_Int32" => OP res empty (Cast Bits16Type Int32Type) args
+        "prim__cast_Bits32_to_Int32" => OP res empty (Cast Bits32Type Int32Type) args
+        "prim__cast_Bits64_to_Int32" => OP res empty (Cast Bits64Type Int32Type) args
+      
+        "prim__cast_Felt_to_Int64" => OP res empty (Cast FeltType Int64Type) args
+        "prim__cast_Int_to_Int64" => OP res empty (Cast IntType Int64Type) args
+        "prim__cast_Int8_to_Int64" => OP res empty (Cast Int8Type Int64Type) args
+        "prim__cast_Int16_to_Int64" => OP res empty (Cast Int16Type Int64Type) args
+        "prim__cast_Int32_to_Int64" => OP res empty (Cast Int32Type Int64Type) args
+        "prim__cast_Integer_to_Int64" => OP res empty (Cast IntegerType Int64Type) args
+        "prim__cast_Bits8_to_Int64" => OP res empty (Cast Bits8Type Int64Type) args
+        "prim__cast_Bits16_to_Int64" => OP res empty (Cast Bits16Type Int64Type) args
+        "prim__cast_Bits32_to_Int64" => OP res empty (Cast Bits32Type Int64Type) args
+        "prim__cast_Bits64_to_Int64" => OP res empty (Cast Bits64Type Int64Type) args
 
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Felt_to_Int16")) res args = OP res empty (Cast FeltType Int16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int_to_Int16")) res args = OP res empty (Cast IntType Int16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int8_to_Int16")) res args = OP res empty (Cast Int8Type Int16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int32_to_Int16")) res args = OP res empty (Cast Int32Type Int16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int64_to_Int16")) res args = OP res empty (Cast Int64Type Int16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits8_to_Int16")) res args = OP res empty (Cast Bits8Type Int16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits16_to_Int16")) res args = OP res empty (Cast Bits16Type Int16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits32_to_Int16")) res args = OP res empty (Cast Bits32Type Int16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits64_to_Int16")) res args = OP res empty (Cast Bits64Type Int16Type) args
+        "prim__cast_Felt_to_Integer" => OP res empty (Cast FeltType IntegerType) args
+        "prim__cast_Int_to_Integer" => OP res empty (Cast IntType IntegerType) args
+        "prim__cast_Int8_to_Integer" => OP res empty (Cast Int8Type IntegerType) args
+        "prim__cast_Int16_to_Integer" => OP res empty (Cast Int16Type IntegerType) args
+        "prim__cast_Int32_to_Integer" => OP res empty (Cast Int32Type IntegerType) args
+        "prim__cast_Int64_to_Integer" => OP res empty (Cast Int64Type IntegerType) args
+        "prim__cast_Bits8_to_Integer" => OP res empty (Cast Bits8Type IntegerType) args
+        "prim__cast_Bits16_to_Integer" => OP res empty (Cast Bits16Type IntegerType) args
+        "prim__cast_Bits32_to_Integer" => OP res empty (Cast Bits32Type IntegerType) args
+        "prim__cast_Bits64_to_Integer" => OP res empty (Cast Bits64Type IntegerType) args
 
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Felt_to_Int32")) res args = OP res empty (Cast FeltType Int32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int_to_Int32")) res args = OP res empty (Cast IntType Int32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int8_to_Int32")) res args = OP res empty (Cast Int8Type Int32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int16_to_Int32")) res args = OP res empty (Cast Int16Type Int32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int64_to_Int32")) res args = OP res empty (Cast Int64Type Int32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits8_to_Int32")) res args = OP res empty (Cast Bits8Type Int32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits16_to_Int32")) res args = OP res empty (Cast Bits16Type Int32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits32_to_Int32")) res args = OP res empty (Cast Bits32Type Int32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits64_to_Int32")) res args = OP res empty (Cast Bits64Type Int32Type) args
+        "prim__cast_Felt_to_Bits8" => OP res empty (Cast FeltType Bits8Type) args
+        "prim__cast_Int_to_Bits8" => OP res empty (Cast IntType Bits8Type) args
+        "prim__cast_Int8_to_Bits8" => OP res empty (Cast Int8Type Bits8Type) args
+        "prim__cast_Int16_to_Bits8" => OP res empty (Cast Int16Type Bits8Type) args
+        "prim__cast_Int32_to_Bits8" => OP res empty (Cast Int32Type Bits8Type) args
+        "prim__cast_Int64_to_Bits8" => OP res empty (Cast Int64Type Bits8Type) args
+        "prim__cast_Integer_to_Bits8" => OP res empty (Cast IntegerType Bits8Type) args
+        "prim__cast_Bits16_to_Bits8" => OP res empty (Cast Bits16Type Bits8Type) args
+        "prim__cast_Bits32_to_Bits8" => OP res empty (Cast Bits32Type Bits8Type) args
+        "prim__cast_Bits64_to_Bits8" => OP res empty (Cast Bits64Type Bits8Type) args
+      
+        "prim__cast_Felt_to_Bits16" => OP res empty (Cast FeltType Bits16Type) args
+        "prim__cast_Int_to_Bits16" => OP res empty (Cast IntType Bits16Type) args
+        "prim__cast_Int8_to_Bits16" => OP res empty (Cast Int8Type Bits16Type) args
+        "prim__cast_Int16_to_Bits16" => OP res empty (Cast Int16Type Bits16Type) args
+        "prim__cast_Int32_to_Bits16" => OP res empty (Cast Int32Type Bits16Type) args
+        "prim__cast_Int64_to_Bits16" => OP res empty (Cast Int64Type Bits16Type) args
+        "prim__cast_Integer_to_Bits16" => OP res empty (Cast IntegerType Bits16Type) args
+        "prim__cast_Bits8_to_Bits16" => OP res empty (Cast Bits8Type Bits16Type) args
+        "prim__cast_Bits32_to_Bits16" => OP res empty (Cast Bits32Type Bits16Type) args
+        "prim__cast_Bits64_to_Bits16" => OP res empty (Cast Bits64Type Bits16Type) args
+      
+        "prim__cast_Felt_to_Bits32" => OP res empty (Cast FeltType Bits32Type) args
+        "prim__cast_Int_to_Bits32" => OP res empty (Cast IntType Bits32Type) args
+        "prim__cast_Int8_to_Bits32" => OP res empty (Cast Int8Type Bits32Type) args
+        "prim__cast_Int16_to_Bits32" => OP res empty (Cast Int16Type Bits32Type) args
+        "prim__cast_Int32_to_Bits32" => OP res empty (Cast Int32Type Bits32Type) args
+        "prim__cast_Int64_to_Bits32" => OP res empty (Cast Int64Type Bits32Type) args
+        "prim__cast_Integer_to_Bits32" => OP res empty (Cast IntegerType Bits32Type) args
+        "prim__cast_Bits8_to_Bits32" => OP res empty (Cast Bits8Type Bits32Type) args
+        "prim__cast_Bits16_to_Bits32" => OP res empty (Cast Bits16Type Bits32Type) args
+        "prim__cast_Bits64_to_Bits32" => OP res empty (Cast Bits64Type Bits32Type) args
+      
+        "prim__cast_Felt_to_Bits64" => OP res empty (Cast FeltType Bits64Type) args
+        "prim__cast_Int_to_Bits64" => OP res empty (Cast IntType Bits64Type) args
+        "prim__cast_Int8_to_Bits64" => OP res empty (Cast Int8Type Bits64Type) args
+        "prim__cast_Int16_to_Bits64" => OP res empty (Cast Int16Type Bits64Type) args
+        "prim__cast_Int32_to_Bits64" => OP res empty (Cast Int32Type Bits64Type) args
+        "prim__cast_Int64_to_Bits64" => OP res empty (Cast Int64Type Bits64Type) args
+        "prim__cast_Integer_to_Bits64" => OP res empty (Cast IntegerType Bits64Type) args
+        "prim__cast_Bits8_to_Bits64" => OP res empty (Cast Bits8Type Bits64Type) args
+        "prim__cast_Bits16_to_Bits64" => OP res empty (Cast Bits16Type Bits64Type) args
+        "prim__cast_Bits32_to_Bits64" => OP res empty (Cast Bits32Type Bits64Type) args
+        name => assert_total $ idris_crash $ "Unsupported cast: " ++ name
+    
+    "Common.Felt" => 
+      case name of
+        "prim__mk_Felt" => OP res empty (Cast IntegerType FeltType) args
+        "prim__from_Felt" => OP res empty (Cast FeltType IntType) args
+        "prim__eq_Felt" => OP res empty (EQ FeltType) args
+        "prim__add_Felt" => OP res empty (Add FeltType) args
+        "prim__mul_Felt" => OP res empty (Mul FeltType) args
+        "prim__sub_Felt" => OP res empty (Sub FeltType) args
+        "prim__div_Felt" => OP res empty (Div FeltType) args
+        "prim__mod_Felt" => OP res empty (Mod FeltType) args
+        "prim__neg_Felt" => OP res empty (Neg FeltType) args
+        name => assert_total $ idris_crash $ "Unsupported felt operation: " ++ name
 
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Felt_to_Int64")) res args = OP res empty (Cast FeltType Int64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int_to_Int64")) res args = OP res empty (Cast IntType Int64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int8_to_Int64")) res args = OP res empty (Cast Int8Type Int64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int16_to_Int64")) res args = OP res empty (Cast Int16Type Int64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int32_to_Int64")) res args = OP res empty (Cast Int32Type Int64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits8_to_Int64")) res args = OP res empty (Cast Bits8Type Int64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits16_to_Int64")) res args = OP res empty (Cast Bits16Type Int64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits32_to_Int64")) res args = OP res empty (Cast Bits32Type Int64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits64_to_Int64")) res args = OP res empty (Cast Bits64Type Int64Type) args
+    ns => case splitLast '_' name of
+      Just (name', "addr")  => let storageVarName = UN $ Basic $ name'
+                       in STARKNETINTRINSIC res empty (StorageVarAddr storageVarName) []
+      Just (name', "event") => let eventName = UN $ Basic $ name'
+                       in STARKNETINTRINSIC res empty (EventSelector eventName) []
+      _            => assert_total $ idris_crash $ "Unsupported ExtPrim operation: " ++ show ns ++ show name
 
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Felt_to_Bits8")) res args = OP res empty (Cast FeltType Bits8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int_to_Bits8")) res args = OP res empty (Cast IntType Bits8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int8_to_Bits8")) res args = OP res empty (Cast Int8Type Bits8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int16_to_Bits8")) res args = OP res empty (Cast Int16Type Bits8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int32_to_Bits8")) res args = OP res empty (Cast Int32Type Bits8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int64_to_Bits8")) res args = OP res empty (Cast Int64Type Bits8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits16_to_Bits8")) res args = OP res empty (Cast Bits16Type Bits8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits32_to_Bits8")) res args = OP res empty (Cast Bits32Type Bits8Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits64_to_Bits8")) res args = OP res empty (Cast Bits64Type Bits8Type) args
+fromANFExtPrim name res args = assert_total $ idris_crash $ "Unsupported ExtPrim operation: " ++ show name
 
-
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Felt_to_Bits16")) res args = OP res empty (Cast FeltType Bits16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int_to_Bits16")) res args = OP res empty (Cast IntType Bits16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int8_to_Bits16")) res args = OP res empty (Cast Int8Type Bits16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int16_to_Bits16")) res args = OP res empty (Cast Int16Type Bits16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int32_to_Bits16")) res args = OP res empty (Cast Int32Type Bits16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int64_to_Bits16")) res args = OP res empty (Cast Int64Type Bits16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits8_to_Bits16")) res args = OP res empty (Cast Bits8Type Bits16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits32_to_Bits16")) res args = OP res empty (Cast Bits32Type Bits16Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits64_to_Bits16")) res args = OP res empty (Cast Bits64Type Bits16Type) args
-
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Felt_to_Bits32")) res args = OP res empty (Cast FeltType Bits32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int_to_Bits32")) res args = OP res empty (Cast IntType Bits32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int8_to_Bits32")) res args = OP res empty (Cast Int8Type Bits32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int16_to_Bits32")) res args = OP res empty (Cast Int16Type Bits32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int32_to_Bits32")) res args = OP res empty (Cast Int32Type Bits32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int64_to_Bits32")) res args = OP res empty (Cast Int64Type Bits32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits8_to_Bits32")) res args = OP res empty (Cast Bits8Type Bits32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits16_to_Bits32")) res args = OP res empty (Cast Bits16Type Bits32Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits64_to_Bits32")) res args = OP res empty (Cast Bits64Type Bits32Type) args
-
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Felt_to_Bits64")) res args = OP res empty (Cast FeltType Bits64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int_to_Bits64")) res args = OP res empty (Cast IntType Bits64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int8_to_Bits64")) res args = OP res empty (Cast Int8Type Bits64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int16_to_Bits64")) res args = OP res empty (Cast Int16Type Bits64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int32_to_Bits64")) res args = OP res empty (Cast Int32Type Bits64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Int64_to_Bits64")) res args = OP res empty (Cast Int64Type Bits64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits8_to_Bits64")) res args = OP res empty (Cast Bits8Type Bits64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits16_to_Bits64")) res args = OP res empty (Cast Bits16Type Bits64Type) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__cast_Bits32_to_Bits64")) res args = OP res empty (Cast Bits32Type Bits64Type) args
-
-fromANFExtPrim (NS _ (UN $ Basic "prim__mk_Felt")) res args = OP res empty (Cast IntegerType FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__from_Felt")) res args = OP res empty (Cast FeltType IntType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__eq_Felt")) res args = OP res empty (EQ FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__add_Felt")) res args = OP res empty (Add FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__mul_Felt")) res args = OP res empty (Mul FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__sub_Felt")) res args = OP res empty (Sub FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__div_Felt")) res args = OP res empty (Div FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__mod_Felt")) res args = OP res empty (Mod FeltType) args
-fromANFExtPrim (NS _ (UN $ Basic "prim__neg_Felt")) res args = OP res empty (Neg FeltType) args
-
-fromANFExtPrim name res args = EXTPRIM [res] empty name args
 
 -- Nothing in target means return
 fromANFInst : (regInfo:(Int,Int)) -> SortedMap Int CairoReg -> (target : Result) -> ANF -> Core (Int, List CairoInst)
-fromANFInst (nextReg,_) subs (Assign Eliminated) _ = pure (nextReg, [])
-fromANFInst regInfo subs res (AV _ reg) = pure (produceResult regInfo res (\r => ASSIGN r (resolveReg subs reg)))
-fromANFInst regInfo subs res (AAppName _ _ name args) = pure (produceResult regInfo res (\r => CALL [r] empty name (map (resolveReg subs) args)))
+fromANFInst (nextReg,_) subs (Assign (Eliminated _)) _    = pure (nextReg, [])
+fromANFInst regInfo subs res (AV _ reg)                   = pure (produceResult regInfo res (\r => ASSIGN r (resolveReg subs reg)))
+fromANFInst regInfo subs res (AAppName _ _ name args)     = pure (produceResult regInfo res (\r => CALL [r] empty name (map (resolveReg subs) args)))
 fromANFInst regInfo subs res (AUnderApp _ name miss args) = pure (produceResult regInfo res (\r => MKCLOSURE r name miss (map (resolveReg subs) args)))
-fromANFInst regInfo subs res (AApp _ _ src arg) = pure (produceResult regInfo res (\r => APPLY r empty (resolveReg subs src) (resolveReg subs arg)))
-fromANFInst regInfo subs res (ACon _ n ci tag args) = pure (produceResult regInfo res (\r => MKCON r tag (map (resolveReg subs) args)))
+fromANFInst regInfo subs res (AApp _ _ src arg)           = pure (produceResult regInfo res (\r => APPLY r empty (resolveReg subs src) (resolveReg subs arg)))
+fromANFInst regInfo subs res (ACon _ n ci tag args)       = pure (produceResult regInfo res (\r => MKCON r tag (map (resolveReg subs) args)))
 fromANFInst regInfo subs res (AOp _ _ fn args)
     = do cairoPrimFn <- fromANFPrimFn fn
          pure (produceResult regInfo res (\r => OP r empty cairoPrimFn (map (resolveReg subs) (toList args))))
 
 fromANFInst regInfo subs res (AExtPrim _ _ name args) = pure (produceResult regInfo res (\r => fromANFExtPrim name r (map (resolveReg subs) args)))
-fromANFInst regInfo subs res (APrimVal _ const) = pure (produceResult regInfo res (\r => MKCONSTANT r (fromANFConst const)))
-fromANFInst regInfo subs res (AErased _) = pure (produceResult regInfo res (\r => NULL r))
-fromANFInst regInfo subs res (ACrash _ err) = pure (produceResult regInfo res (\r => ERROR r err))
+fromANFInst regInfo subs res (APrimVal _ const)       = pure (produceResult regInfo res (\r => MKCONSTANT r (fromANFConst const)))
+fromANFInst regInfo subs res (AErased _)              = pure (produceResult regInfo res (\r => NULL r))
+fromANFInst regInfo subs res (ACrash _ err)           = pure (produceResult regInfo res (\r => ERROR r err))
 fromANFInst (next,depth) subs res (ALet _ var val body)
     = do (next1, v) <- fromANFInst (next+1,depth) subs (Assign newReg) val
          (next2, b) <- fromANFInst (next1,depth) newSubs res body
@@ -800,6 +958,10 @@ fromANFInst (next,depth) subs res (AConstCase fc src alts def)
 
 fromANFInst regInfo subs res _ = pure (produceResult regInfo res (\r => NULL r))
 
+---------------------------------
+---- FFI Definitions Start ------
+---------------------------------
+
 dropStr : Int -> String -> String
 dropStr n str = substr (cast n) (cast ((strLength str)- n)) str
 
@@ -812,7 +974,8 @@ parseImports : List String -> SortedSet Import
 parseImports input = fromMaybe empty (map parse (find (\s => isPrefixOf "imports:" s) input))
    where parseImport : String -> Import
          parseImport str = case split (== ' ') (trim str) of
-                             (ns ::: (f :: Nil)) => MkImport ns f
+                             (ns ::: (f :: Nil)) => MkImport ns f Nothing
+                             (ns ::: (f :: (r :: Nil))) => MkImport ns f (Just r)
                              _                   => assert_total $ idris_crash ("can not parse \"" ++ str ++ "\"" )
    
          stripPrefix : String -> String
@@ -840,11 +1003,15 @@ parseUntupledSig input = fromMaybe Nothing (map parse (find (\s => isPrefixOf "u
      where innerParse : String -> TupleStructure
            innerParse str = if (isPrefixOf "(" str) && (isSuffixOf ")" str)
                 -- todo: add support for data in addition to records by specifing tag
-                then Tupled 0 (map (innerParse . trim) (filter (\s => (strLength (trim s)) /= 0) (forget (split (== ',') (trimEnds 1 str)))))
+                then Tupled 0 $ map (\x => innerParse $ assert_smaller str $ trim x) 
+                              $ filter (\s => (strLength (trim s)) /= 0) 
+                              $ forget 
+                              $ split (== ',') 
+                              $ trimEnds 1 str
                 else if str == "_"
                     then ReturnValue
                     else assert_total $ idris_crash (" can not parse " ++ str )
-           parse: String -> Maybe TupleStructure
+           parse : String -> Maybe TupleStructure
            parse str = Just $ innerParse $ trim (dropStr (strLength "untupled:") str)
 
 parseIsApStable : List String -> Bool
@@ -863,15 +1030,14 @@ parseForeign defs = MkForeignInfo (parseIsApStable cleanInput) (parseUntupledSig
     where cleanInput : List String
           cleanInput = map trim defs
 
-collectStrSize : (Name, ANFDef)
-
-MkACon : (tag : Maybe Int) -> (arity : Nat) -> (nt : Maybe Nat) -> ANFDef
-
+---------------------------------
+----- FFI Definitions End -------
+---------------------------------
 export
 fromANFDef : (Name, ANFDef) -> Core (List (Name, CairoDef))
 fromANFDef (name, MkAFun args body) 
     = do (_, cairoBody) <- fromANFInst (0, 0) subst Return body
-         pure [(name, FunDef argRegs empty ["res"] cairoBody)]
+         pure [(name, FunDef argRegs empty [CustomReg "res" Nothing] cairoBody)]
     where numArgs : Int
           numArgs = cast (length args)
           argRegs : List CairoReg

@@ -22,7 +22,11 @@ import public Common.ECDSA
 import public Common.Felt
 import public Common.Memory
 import public Common.Pedersen
+import public Common.Segment
 import public Cairo.Output
 
-
+%noinline
+public export
+unsafePerformIO : (ca : Cairo a) -> a
+unsafePerformIO ca = let (MkCairoRes _ a) = (toPrimCairo ca (believe_me 0)) in a
 

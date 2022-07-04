@@ -34,9 +34,11 @@ registerTracker = generalizeTrack initParam generalTrack implicitRegTracker
 
 -- the register collector
 collectUsedRegisters : (Name, CairoDef) -> SortedSet CairoReg
-collectUsedRegisters def = snd $ runVisitConcatCairoDef (traversal $ valueCollector idLens (dbgDef def) registerTracker returnCollector) def
+collectUsedRegisters def = snd $ runVisitConcatCairoDef (traversal $ valueCollector idLens (dbgDef def) prepareB registerTracker returnCollector) def
     where dbgDef : (Name, CairoDef) -> CairoReg -> SortedSet CairoReg
           dbgDef (name, def) reg = trace "Register not bound in \{show name}: \{show reg}" (singleton reg)
+          prepareB : CairoReg -> SortedSet CairoReg -> SortedSet CairoReg
+          prepareB r rs = insert r rs
           returnCollector : InstVisit  (SortedSet CairoReg) -> Traversal (ScopedBindings (SortedSet CairoReg)) (SortedSet CairoReg)
           returnCollector (VisitReturn res impls) = pure $ foldl union empty (res ++ (values impls))
           returnCollector _ = pure empty
@@ -47,15 +49,16 @@ collectUsedRegisters def = snd $ runVisitConcatCairoDef (traversal $ valueCollec
 markUnusedRegisters : SortedSet CairoReg -> (Name, CairoDef) -> (Name, CairoDef)
 markUnusedRegisters liveRegisters def = substituteDefRegisters marker def
     where marker : CairoReg -> Maybe CairoReg
-          marker (Const c) = Nothing         -- We leave constant registers untouched
-          marker (NamedParam n) = Nothing    -- We leave named registers untouched, they have a name for a reason
+          marker (Const c) = Nothing        -- We leave constant registers untouched
+          marker (CustomReg n _) = Nothing  -- We leave custom registers untouched, they are custom for a reason
+          marker (Eliminated _) = Nothing   -- Is already Eliminated
           marker reg = if contains reg liveRegisters
-            then Nothing                -- We leave life registers untouched
-            else (Just Eliminated)      -- The rest is eliminated
+            then Nothing                            -- We leave life registers untouched
+            else (Just (Eliminated (Replacement reg)))      -- The rest is eliminated
 
 -- Here Starts the  dead code eliminator
 isRegEliminated : CairoReg -> Bool
-isRegEliminated Eliminated = True
+isRegEliminated (Eliminated _) = True
 isRegEliminated _ = False
 
 isRegAssigEliminated : CairoReg -> Bool
@@ -87,3 +90,6 @@ eliminateDeadCode : (Name, CairoDef) -> (Name, CairoDef)
 eliminateDeadCode def = orderUnassignedRegIndexes $ substituteLinearImplicits (eliminateAssignsDef (markUnusedRegisters lifeRegisters def))
     where lifeRegisters : SortedSet CairoReg
           lifeRegisters = collectUsedRegisters def
+
+-- For testing when dead code elim should be disabled
+-- eliminateDeadCode def = orderUnassignedRegIndexes def
