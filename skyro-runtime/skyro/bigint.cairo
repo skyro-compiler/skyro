@@ -162,9 +162,13 @@ func div(range_check_ptr, a : felt, b : felt) -> (res : felt, range_check_ptr):
     tempvar res2_raw = new(res_sign,res_abs)
     let res2 = cast(res2_raw,felt)
     if [a] == -1 :
-        tempvar one = new([b], new(1,EON))
-        let (res3, range_check_ptr) = sub(range_check_ptr, res2, cast(one,felt))
-        return (res3, range_check_ptr)
+        if [remainder_abs] == EON:
+            return (res2, range_check_ptr)
+        else:
+            tempvar one = new([b], new(1,EON))
+            let (res3, range_check_ptr) = sub(range_check_ptr, res2, cast(one,felt))
+            return (res3, range_check_ptr)
+        end
     else:
         return (res2, range_check_ptr)
     end
@@ -225,14 +229,14 @@ func to_felt(a : felt) -> (res : felt):
 end
 
 
-func checked_to_felt(range_check_ptr, a : felt) -> (res : felt, range_check_ptr):
+func checked_to_felt(range_check_ptr, a : felt) -> (res : felt, len : felt,  range_check_ptr):
     if [a] == EON:
-        return (0, range_check_ptr)
+        return (0, 0, range_check_ptr)
     else:
         assert [range_check_ptr] = [a]
         assert [range_check_ptr+1] = SHIFT - [a]
-        let (rec, range_check_ptr) = checked_to_felt(a+1, range_check_ptr+2)
-        return ((rec*SHIFT)+[a], range_check_ptr)
+        let (rec, len, range_check_ptr) = checked_to_felt(range_check_ptr+2, a+1)
+        return ((rec*SHIFT)+[a], len+1, range_check_ptr)
     end
 end
 
@@ -255,8 +259,6 @@ func from_felt(range_check_ptr, a : felt) -> (res : felt, range_check_ptr):
 
         # Compute absolute
         tempvar absolute = sign*a
-        assert [range_check_ptr] = absolute
-        let range_check_ptr = range_check_ptr+1
         %{
             from starkware.cairo.common.math_utils import as_int
             ids.arr = segments.add()
@@ -273,10 +275,14 @@ func from_felt(range_check_ptr, a : felt) -> (res : felt, range_check_ptr):
                 memory[ids.arr+2] = e3 % PRIME
                 memory[ids.arr+3] = ids.EON % PRIME
         %}
-        # Todo: TAKE OVER JAMIS IMPL AS SONN AS HE HAS IT
-        #Todo: Incorrect, max 3 is allowd & last is limited by PRIME - SHIFT*SHIFT
-        let (raw, range_check_ptr) = checked_to_felt(range_check_ptr, arr)
-        assert a = sign*raw
+
+        let (raw, len, range_check_ptr) = checked_to_felt(range_check_ptr, arr)
+        # Todo: Not correct (could be 3)
+        # Note: it could be a len 3 value with very small third comp
+        #       However, the 3rd can not be anything, but must be rather small
+        #       This is not implemented yet and to be save we support only numbers up to 2^250
+        assert len = 2
+        assert absolute = raw
         tempvar res = new(sign,arr)
         return (cast(res,felt),range_check_ptr)
     else:

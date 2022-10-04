@@ -16,6 +16,10 @@ constr initVal = writeStorageVar (balance `at` 12) initVal
 viewEx : View m => m Felt
 viewEx = readStorageVar (balance `at` 12)
 
+-- View function -- Testing ambiguity resolution
+name : View m => m Felt
+name = pure 10
+
 -- External function
 writeEx : External m => Felt -> m Unit
 writeEx val = do 
@@ -25,6 +29,6 @@ writeEx val = do
   emitEvent ((balanceChanged `applyValue` 12) `applyValue` newBal)
 
 main = abi 
-  {functions = ["constr", "viewEx", "writeEx"]} 
+  {functions = ["constr", "viewEx", "writeEx", "name"]}
   {storageVars = ["balance"]} 
   {events = ["balanceChanged"]}

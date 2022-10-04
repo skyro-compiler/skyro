@@ -1,7 +1,6 @@
 module Optimisation.DataFlowAnalyser
 
-import Core.Context
-
+import CairoCode.Name
 import Utils.Helpers
 import CairoCode.Traversal.Base
 import CairoCode.CairoCode
@@ -9,6 +8,8 @@ import CairoCode.CairoCodeUtils
 import CommonDef
 import Data.SortedSet
 import Data.SortedMap
+import Data.List
+import Data.Maybe
 
 import Debug.Trace
 
@@ -31,7 +32,7 @@ import Debug.Trace
 public export
 record GlobalReg where
     constructor MkGlobalReg
-    function : Name
+    function : CairoName
     register : CairoReg
 
 public export
@@ -57,7 +58,7 @@ RegisterMapping = SortedMap GlobalReg SVar
 public export
 data Tag : Type where
    Ctr : Int -> Tag
-   Clo : Name -> Tag
+   Clo : CairoName -> Tag
    All : Tag                -- Is used when a project accesses a field but we actually do not know what the tag is
                             -- At the end we need to unify everything in All with each Ctr & Clo
                             -- Alternative we could do on the fly while unifying the tags
@@ -143,7 +144,7 @@ record Environment where
      generator : Nat
      registers : RegisterMapping
      structures : StructureMapping
-     defSigs : SortedMap Name SignatureRegs
+     defSigs : SortedMap CairoName SignatureRegs
      caseTracker : CaseTracker
 
 genSVar : Environment -> (SVar, Environment)
@@ -155,7 +156,7 @@ mapSVar v s = { structures $= insert v s }
 mapReg : GlobalReg -> SVar -> Environment -> Environment
 mapReg r v = { registers $= insert r v }
 
-mapSig : Name -> SignatureRegs -> Environment -> Environment
+mapSig : CairoName -> SignatureRegs -> Environment -> Environment
 mapSig n s = { defSigs $= insert n s }
 
 public export
@@ -193,7 +194,7 @@ getBranchReg track = case track.bindStack of
     _ => assert_total $ idris_crash "empty stack"
 
 public export
-trackCase : Name -> InstVisit CairoReg -> CaseTracker -> CaseTracker
+trackCase : CairoName -> InstVisit CairoReg -> CaseTracker -> CaseTracker
 trackCase n (VisitCase r) ct = pushCase (MkGlobalReg n r) ct
 trackCase n (VisitConBranch t) ct = pushBranch (map Ctr t) ct
 trackCase n (VisitConstBranch _) ct = pushBranch Nothing ct
@@ -383,7 +384,7 @@ assignStruct (MkGlobalReg _ (Const c)) s env = env
 assignStruct (MkGlobalReg _ (Eliminated _)) s env = env
 assignStruct gr s env = let (nsv, nEnv) = newVar env s in assignSVar gr nsv nEnv
 
-unifyInstDef : Environment ->  (Name, CairoDef) -> Environment
+unifyInstDef : Environment ->  (CairoName, CairoDef) -> Environment
 -- Not sure if gc after each is necessary but better slow than out of memory
 unifyInstDef env def@(name, fDef) = gc $ foldl trackAndUnify env (fromCairoDef def)
     where global : CairoReg -> GlobalReg
@@ -462,28 +463,34 @@ unifyInstDef env def@(name, fDef) = gc $ foldl trackAndUnify env (fromCairoDef d
           trackAndUnify env inst = unifyInstVisit ({ caseTracker $= trackCase name inst } env) inst
 
 -- Collects all functions that are closure targets
-allClosureTargets : List (Name, CairoDef) -> SortedSet Name
+-- Todo: if this gets to slow use custom SemiGroup for the set
+allClosureTargets : List (CairoName, CairoDef) -> SortedSet CairoName
 allClosureTargets defs = snd $ runVisitConcatCairoDefs (pureTraversal allClosureTargetsTraversal) defs
-    where allClosureTargetsTraversal : InstVisit CairoReg -> SortedSet Name
+    -- Note: The Idris default implementation is slow, this is faster in the cases where it matters
+    where Semigroup (SortedSet CairoName) where
+            (<+>) a b = if a == b
+                then a
+                else foldl (\acc, e => insert e acc) a b
+          allClosureTargetsTraversal : InstVisit CairoReg -> SortedSet CairoName
           allClosureTargetsTraversal (VisitMkClosure _ name _ _) = singleton name
           allClosureTargetsTraversal _ = empty
 
 -- Initiates the sigs and unifies all defs
 --       ExtFun, ForeignFun & FunDef that are ClosureTargets -> Are initated as Escaped
 --       FunDef that are not ClosureTargets -> Are initated as Escaped
-dataFlowCapturing : List (Name, CairoDef) -> Environment
+dataFlowCapturing : List (CairoName, CairoDef) -> Environment
 dataFlowCapturing defs = foldl unifyInstDef initialEnv defs
-    where cloFuns : SortedSet Name
+    where cloFuns : SortedSet CairoName
           cloFuns = allClosureTargets defs
           initSig : SignatureRegs -> Structure -> Environment -> Environment
           initSig (MkSigRegs ps rs implIn implOut) init env = foldl (\e, r => assignStruct r init e) env (ps ++ rs ++ (values implIn) ++ (values implOut))
-          enterSig : Name -> SignatureRegs -> Structure -> Environment -> Environment
+          enterSig : CairoName -> SignatureRegs -> Structure -> Environment -> Environment
           enterSig name sig init env = initSig sig init (mapSig name sig env)
           makeOutImpls : SortedMap LinearImplicit GlobalReg  -> SortedMap LinearImplicit GlobalReg
           makeOutImpls = mapValueMap (mapCReg (prefixedReg "out"))
-          makeSigRet : Name -> List CairoReg -> List CairoReg -> SortedMap LinearImplicit CairoReg -> SignatureRegs
+          makeSigRet : CairoName -> List CairoReg -> List CairoReg -> SortedMap LinearImplicit CairoReg -> SignatureRegs
           makeSigRet name params rets impls = let gimpls = (mapValueMap (MkGlobalReg name) impls) in MkSigRegs (map (MkGlobalReg name) params) (map (MkGlobalReg name) rets) gimpls (makeOutImpls gimpls)
-          enterMapping : Environment -> (Name, CairoDef) -> Environment
+          enterMapping : Environment -> (CairoName, CairoDef) -> Environment
           enterMapping env (name, FunDef params impls rets _) = enterSig name (makeSigRet name params rets impls) (if contains name cloFuns then Escaped else Free) env
           enterMapping env (name, ExtFunDef _ params impls rets _) = enterSig name (makeSigRet name params rets impls) Escaped env
           enterMapping env (name, ForeignDef info args rs) = enterSig name (makeSigRet name params rets impls) Escaped env
@@ -548,14 +555,14 @@ groupRegisters env = mapFilter (\(s,gr) => gr.structure /= Escaped && gr.structu
           refinedGroups : SortedMap SVar DataFlow
           refinedGroups = mapMap (\(s,rs) => (s, MkDataFlow (getStructure s env) rs [] [])) rawGroups
 
-addSink : Environment -> Name -> CairoReg -> SrcSnkDesc -> SortedMap SVar DataFlow -> SortedMap SVar DataFlow
+addSink : Environment -> CairoName -> CairoReg -> SrcSnkDesc -> SortedMap SVar DataFlow -> SortedMap SVar DataFlow
 addSink env fn reg ssd flows = case resolveReg (MkGlobalReg fn reg) env of
     Nothing => flows
     (Just sv) => case lookup sv flows of
         Nothing => flows
         (Just df) => insert sv ({ sinks $= (ssd::)} df) flows
 
-addSource : Environment -> Name -> CairoReg -> SrcSnkDesc -> SortedMap SVar DataFlow -> SortedMap SVar DataFlow
+addSource : Environment -> CairoName -> CairoReg -> SrcSnkDesc -> SortedMap SVar DataFlow -> SortedMap SVar DataFlow
 addSource env fn reg ssd flows = case resolveReg (MkGlobalReg fn reg) env of
     Nothing => flows
     (Just sv) => case lookup sv flows of
@@ -572,7 +579,7 @@ updateResCaseTracker : (CaseTracker -> CaseTracker) -> SrcSnkResolveState -> Src
 updateResCaseTracker f = { caseTracker $= f }
 
 -- todo: shall we add calls to foreign + extprim + appla arg/res as sink/source? (is usually only on escaped ones)
-collectInstVisitDef : (Name, CairoDef) -> Environment -> SrcSnkResolveState -> SrcSnkResolveState
+collectInstVisitDef : (CairoName, CairoDef) -> Environment -> SrcSnkResolveState -> SrcSnkResolveState
 collectInstVisitDef def@(name, _) env res = foldl trackAndVisit res (fromCairoDef def)
     where addSrc : CairoReg -> SrcSnkDesc -> SrcSnkResolveState -> SrcSnkResolveState
           addSrc reg ssd = { flows $= addSource env name reg ssd}
@@ -596,12 +603,12 @@ collectInstVisitDef def@(name, _) env res = foldl trackAndVisit res (fromCairoDe
           trackAndVisit : SrcSnkResolveState -> InstVisit CairoReg -> SrcSnkResolveState
           trackAndVisit res inst = visitInsts ({ caseTracker $= trackCase name inst } res) inst
 
-collectInstVisitDefs : List (Name, CairoDef) -> Environment -> SrcSnkResolveState -> SrcSnkResolveState
+collectInstVisitDefs : List (CairoName, CairoDef) -> Environment -> SrcSnkResolveState -> SrcSnkResolveState
 collectInstVisitDefs defs env flows = foldl (\f,def => collectInstVisitDef def env f) flows defs
 
-analyseDataFlow : List (Name, CairoDef) -> Environment -> List DataFlow
+analyseDataFlow : List (CairoName, CairoDef) -> Environment -> List DataFlow
 analyseDataFlow defs dataFlow = values $ flows $ collectInstVisitDefs defs dataFlow (MkSSRState (groupRegisters dataFlow) (MkCTrack Nil Nil empty))
 
 export
-dataFlowAnalysis : List (Name, CairoDef) -> List DataFlow
+dataFlowAnalysis : List (CairoName, CairoDef) -> List DataFlow
 dataFlowAnalysis defs = analyseDataFlow defs (dataFlowCapturing defs)

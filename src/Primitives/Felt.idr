@@ -1,7 +1,8 @@
 ||| Primitive operations for the Felt data type.
 module Primitives.Felt
 
-import Core.Context
+-- import Core.Context
+import CairoCode.Name
 import CairoCode.CairoCode
 import Data.SortedSet
 import Data.SortedMap
@@ -191,11 +192,11 @@ export
 ---------------------------------------------------------------------------------------------------
 -- Felt LT
 ---------------------------------------------------------------------------------------------------
-lt_felt_name : Name
+lt_felt_name : CairoName
 lt_felt_name = makeBuiltinName "lt_felt"
 
 lt_felt_import : Import
-lt_felt_import = MkImport "skyro.felt" "felt_lt" (Just "lt_felt")
+lt_felt_import = MkImport "skyro.felt_cmps" "felt_lt" (Just "lt_felt")
 
 export
 [lt_felt] PrimFn where
@@ -211,11 +212,11 @@ export
 ---------------------------------------------------------------------------------------------------
 -- Felt LTE
 ---------------------------------------------------------------------------------------------------
-lte_felt_name : Name
+lte_felt_name : CairoName
 lte_felt_name = makeBuiltinName "lte_felt"
 
 lte_felt_import : Import
-lte_felt_import = MkImport "skyro.felt" "felt_lte" (Just "lte_felt")
+lte_felt_import = MkImport "skyro.felt_cmps" "felt_lte" (Just "lte_felt")
 
 export
 [lte_felt] PrimFn where

@@ -26,9 +26,28 @@ prim__div_Felt : Felt -> Felt -> Felt
 public export %extern
 prim__eq_Felt : Felt -> Felt -> Bool
 
+public export %extern
+prim__lt_Felt : Felt -> Felt -> Bool
+
+public export %extern
+prim__gt_Felt : Felt -> Felt -> Bool
+
+public export %extern
+prim__lte_Felt : Felt -> Felt -> Bool
+
+public export %extern
+prim__gte_Felt : Felt -> Felt -> Bool
+
 public export %inline
 Eq Felt where
   (==) = prim__eq_Felt
+
+public export %inline
+Ord Felt where
+  (<)  = prim__lt_Felt
+  (>)  = prim__gt_Felt
+  (<=) = prim__lte_Felt
+  (>=) = prim__gte_Felt
 
 public export %inline
 Num Felt where
@@ -95,7 +114,7 @@ export
     "linear_implicits:range_check_ptr"
     """
     code:
-    func Common_Felt_is_le_felt(range_check_ptr, a, b) -> (res, range_check_ptr):
+    func $name$(range_check_ptr, a, b) -> (res, range_check_ptr):
        let (res) = is_le_felt{range_check_ptr = range_check_ptr}(a,b)
        return (res, range_check_ptr)
     end

@@ -1,15 +1,19 @@
 module Optimisation.StaticProcessing.InstructionDeduplication
 
-import Core.Context
+-- import Core.Context
+import CairoCode.Name
 import CairoCode.CairoCode
 import CairoCode.CairoCodeUtils
 import Data.List
+import Data.Maybe
 import Data.SortedMap
 import CairoCode.Traversal.Base
 import CairoCode.Traversal.Composition
 import Utils.Lens
 import CommonDef
+import Primitives.Externals
 
+%hide Prelude.toList
 
 -- This helps to deduplicate instructions representing the same operation with the same arguments
 --  The second apperance is replaced by assigning the result of the first to the second (instead of recomputing)
@@ -24,11 +28,11 @@ import CommonDef
 export
 data InstInput: Type where
      Construct : Maybe Int -> List CairoReg -> InstInput
-     Closure : Name -> List CairoReg -> InstInput
+     Closure : CairoName -> List CairoReg -> InstInput
      Apply : CairoReg -> CairoReg -> InstInput
-     Call : Name -> List CairoReg -> InstInput
+     Call : CairoName -> List CairoReg -> InstInput
      Op : CairoPrimFn -> List CairoReg -> InstInput
-     Extprim : Name -> List CairoReg -> InstInput
+     Extprim : CairoName -> List CairoReg -> InstInput
      Intrinsic : StarkNetIntrinsic -> List CairoReg -> InstInput
      Project : Nat -> CairoReg -> InstInput
 
@@ -71,7 +75,9 @@ inputFromVisit (VisitMkClosure res name _ args) = Just ([res], Closure name args
 inputFromVisit (VisitApply res _ f a) = Just ([res], Apply f a)
 inputFromVisit (VisitCall res _ name args) = Just (res, Call name args)
 inputFromVisit (VisitOp res _ fn args) =  Just ([res], Op fn args)
-inputFromVisit (VisitExtprim res _ name args) = Just (res, Extprim name args)
+inputFromVisit (VisitExtprim res _ name args) = if externalIsTransparent name
+    then Just (res, Extprim name args)
+    else Nothing
 inputFromVisit (VisitStarkNetIntrinsic res _ intr args) = Just ([res], Intrinsic intr args)
 inputFromVisit (VisitProject res arg pos) = Just ([res], Project pos arg)
 inputFromVisit _ = Nothing
@@ -94,6 +100,17 @@ activeInstructionTracker inst = process $ inputFromVisit inst
           process Nothing = pure ()
           process (Just (regs, inst)) = updateStateL headFailLens (insert inst regs)
 
+reassignImpls : SortedMap LinearImplicit (CairoReg, CairoReg) -> List (InstVisit CairoReg)
+reassignImpls impls = map (\(_,(from,to)) => VisitAssign to from) (toList impls)
+
+reassignInstImpls : InstVisit CairoReg -> List (InstVisit CairoReg)
+reassignInstImpls (VisitApply _ impls _ _) = reassignImpls impls
+reassignInstImpls (VisitCall _ impls _ _) = reassignImpls impls
+reassignInstImpls (VisitOp _ impls _ _) = reassignImpls impls
+reassignInstImpls (VisitExtprim _ impls _ _) = reassignImpls impls
+reassignInstImpls (VisitStarkNetIntrinsic _ impls _ _) = reassignImpls impls
+reassignInstImpls _ = Nil
+
 activeInstructionDedup : InstVisit CairoReg -> Traversal TrackerState (List (InstVisit CairoReg))
 activeInstructionDedup inst = pure $ fromMaybe [inst] (fetchReplacement !(readStateL headFailLens))
     where fetchReplacement : ActiveInsts -> Maybe (List (InstVisit CairoReg))
@@ -101,7 +118,7 @@ activeInstructionDedup inst = pure $ fromMaybe [inst] (fetchReplacement !(readSt
               (res, inputInst) <- inputFromVisit inst
               original <- lookup inputInst activeInsts
               pure $ if (length res) == (length original)
-                  then zipWith (\r,o => VisitAssign r o) res original
+                  then (zipWith (\r,o => VisitAssign r o) res original) ++ (reassignInstImpls inst)
                   else [inst]
 
 export

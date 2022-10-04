@@ -19,6 +19,18 @@ main = do
   putStrLn . show $ (the Integer (3)) `div` (the Integer (-2))
   putStrLn . show $ (the Integer (3)) `mod` (the Integer (-2))
 
+  putStrLn . show $ (the Integer 4) `div` (the Integer 2)
+  putStrLn . show $ (the Integer 4) `mod` (the Integer 2)
+
+  putStrLn . show $ (the Integer (-4)) `div` (the Integer (-2))
+  putStrLn . show $ (the Integer (-4)) `mod` (the Integer (-2))
+
+  putStrLn . show $ (the Integer (-4)) `div` (the Integer (2))
+  putStrLn . show $ (the Integer (-4)) `mod` (the Integer (2))
+
+  putStrLn . show $ (the Integer (4)) `div` (the Integer (-2))
+  putStrLn . show $ (the Integer (4)) `mod` (the Integer (-2))
+
   putStrLn . show $ (the Integer 100) + (the Integer 50)
   putStrLn . show $ (the Integer 100) - (the Integer 50)
   putStrLn . show $ (the Integer 100) * (the Integer 50)

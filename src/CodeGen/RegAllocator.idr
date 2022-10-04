@@ -1,10 +1,11 @@
 module CodeGen.RegAllocator
 
 import CommonDef
-import Core.Name.Namespace
-import Core.Context
-import Compiler.Common
-import Compiler.ANF
+-- import Core.Name.Namespace
+-- import Core.Context
+-- import Compiler.Common
+-- import Compiler.ANF
+import CairoCode.Name
 import Data.List
 import Data.String
 import Data.Vect
@@ -67,15 +68,14 @@ commonPrefix Nil _ = Nil
 commonPrefix (h1::tail1) (h2::tail2) = if h1 == h2 then h1::(commonPrefix tail1 tail2) else Nil
 
 insertReg : RegTreeBlock -> RegInfo -> RegTreeBlock
-insertReg root regInfo = insertIntoBlock (root.depth) pathRes (Just root)
+insertReg root regInfo = let pathRes = fromMaybe [] (foldl computePrefix Nothing (regInfo.positions)) in
+    insertIntoBlock (root.depth) pathRes (Just root)
  where
    computePrefix: Maybe (List Elem) -> UseDef -> Maybe (List Elem)
    computePrefix Nothing (Def path _ _) = Just path
    computePrefix Nothing (Use path _) = Just path
    computePrefix (Just pathAcc) (Def path _ _) = Just (commonPrefix path pathAcc)
    computePrefix (Just pathAcc) (Use path _) = Just (commonPrefix path pathAcc)
-   pathRes: List Elem
-   pathRes = fromMaybe [] (foldl computePrefix Nothing (regInfo.positions))
    mutual
        insertIntoBlock: Int -> List Elem -> Maybe RegTreeBlock -> RegTreeBlock
        insertIntoBlock _ Nil (Just block) = MkRegTreeBlock (block.depth) (regInfo::(block.regs)) (block.cases)
@@ -171,8 +171,9 @@ intrinsicApStable : StarkNetIntrinsic -> Bool
 -- Todo: Check that Cairo really produce ap stable
 intrinsicApStable (StorageVarAddr _) = True
 intrinsicApStable (EventSelector _) = True
+intrinsicApStable (FunctionSelector _) = True
 
-isCairoInstApModStatic : SortedSet Name -> CairoInst -> Bool
+isCairoInstApModStatic : SortedSet CairoName -> CairoInst -> Bool
 isCairoInstApModStatic _ (APPLY _ _ _ _) = False -- An apply can result in an arbitrary ap mod, so this is undef
 isCairoInstApModStatic safeCalls (CALL _ _ n _) = contains n safeCalls
 isCairoInstApModStatic _ (EXTPRIM _ _ name _) = externalApStable name
@@ -184,31 +185,22 @@ isCairoInstApModStatic _ (ERROR _ _ ) = False
 isCairoInstApModStatic _ _ = True
 
 mutual
-    collectCairoInstRegUseCase : SortedSet Name -> List Elem -> (SortedMap CairoReg RegInfo, RegUseState) -> CairoInst -> List (List CairoInst) -> (SortedMap CairoReg RegInfo, RegUseState)
-    collectCairoInstRegUseCase safeCalls path (apMap, (curApRegion, nextApRegion, nextCase)) inst cases = (after, (afterApRegion, afterApRegion+1, nextCase+1))
+    collectCairoInstRegUseCase : SortedSet CairoName -> List Elem -> (SortedMap CairoReg RegInfo, RegUseState) -> CairoInst -> List (List CairoInst) -> (SortedMap CairoReg RegInfo, RegUseState)
+    collectCairoInstRegUseCase safeCalls path (apMap, (curApRegion, nextApRegion, nextCase)) inst cases =
+                let before = collectCairoInstRegUseBefore path curApRegion apMap inst in
+                let inside = foldl applyBranch (before,(nextApRegion,0)) cases in
+                let afterApRegion = fst (snd inside) in
+                let after = collectCairoInstRegUseAfter path afterApRegion (fst inside) inst in
+                (after, (afterApRegion, afterApRegion+1, nextCase+1))
              where
-               before : SortedMap CairoReg RegInfo
-               before = collectCairoInstRegUseBefore path curApRegion apMap inst
-
                branchExtractHelper : Int -> (SortedMap CairoReg RegInfo, RegUseState) -> (SortedMap CairoReg RegInfo, (Int,Int))
                branchExtractHelper nextBr (apMap,(_, next, _)) = (apMap, (next,nextBr))
-
                newPath : List Elem
                newPath = (Case nextCase)::path
-
                applyBranch : (SortedMap CairoReg RegInfo, (Int,Int)) -> List CairoInst -> (SortedMap CairoReg RegInfo, (Int,Int))
                applyBranch (state, (nextApRegion, br)) insts = branchExtractHelper (br+1) (collectCairoInstRegUses safeCalls (Branch br::newPath) (state, (curApRegion, nextApRegion, 0)) insts)
 
-               inside : (SortedMap CairoReg RegInfo, (Int,Int))
-               inside = foldl applyBranch (before,(nextApRegion,0)) cases
-
-               afterApRegion : Int
-               afterApRegion = fst (snd inside)
-
-               after : SortedMap CairoReg RegInfo
-               after = collectCairoInstRegUseAfter path afterApRegion (fst inside) inst
-
-    collectCairoInstRegUse : SortedSet Name -> List Elem -> (SortedMap CairoReg RegInfo, RegUseState) -> CairoInst -> (SortedMap CairoReg RegInfo, RegUseState)
+    collectCairoInstRegUse : SortedSet CairoName -> List Elem -> (SortedMap CairoReg RegInfo, RegUseState) -> CairoInst -> (SortedMap CairoReg RegInfo, RegUseState)
     collectCairoInstRegUse safeCalls path state (CASE from alts Nothing) = collectCairoInstRegUseCase safeCalls path state (CASE from alts Nothing) (map snd alts)
     collectCairoInstRegUse safeCalls path state (CASE from alts (Just def)) =  collectCairoInstRegUseCase safeCalls path state (CASE from alts (Just def)) (def::(map snd alts))
     collectCairoInstRegUse safeCalls path state (CONSTCASE from alts Nothing) =  collectCairoInstRegUseCase safeCalls path state (CONSTCASE from alts Nothing) (map snd alts)
@@ -225,11 +217,14 @@ mutual
        process False = (applyAfter nextApRegion before, (nextApRegion, nextApRegion+1, nextCase))
        process True = (applyAfter curApRegion before, (curApRegion, nextApRegion, nextCase))
 
-    collectCairoInstRegUses: SortedSet Name -> List Elem -> (SortedMap CairoReg RegInfo, RegUseState) -> List CairoInst -> (SortedMap CairoReg RegInfo, RegUseState)
+    collectCairoInstRegUses: SortedSet CairoName -> List Elem -> (SortedMap CairoReg RegInfo, RegUseState) -> List CairoInst -> (SortedMap CairoReg RegInfo, RegUseState)
     collectCairoInstRegUses safeCalls path state insts = foldl (collectCairoInstRegUse safeCalls path) state insts
 
-collectRegUse : SortedSet Name -> List CairoReg -> List CairoInst -> (SortedMap CairoReg RegInfo, Bool)
-collectRegUse safeCalls args insts = (fst collectionRes, hasSingleApRegion)
+collectRegUse : SortedSet CairoName -> List CairoReg -> List CairoInst -> (SortedMap CairoReg RegInfo, Bool)
+collectRegUse safeCalls args insts =
+        let collectionRes = collectCairoInstRegUses safeCalls [] (initial args,(initialApRegion,initialApRegion+1,0)) insts in
+        let hasSingleApRegion = (fst (snd collectionRes)) == initialApRegion in
+        (fst collectionRes, hasSingleApRegion)
     where
      mapEntry : CairoReg -> (CairoReg, RegInfo)
      mapEntry reg = (reg, MkRegInfo [Def [] 0 Nothing] reg reg)
@@ -239,12 +234,6 @@ collectRegUse safeCalls args insts = (fst collectionRes, hasSingleApRegion)
 
      initialApRegion: Int
      initialApRegion = 0
-
-     collectionRes : (SortedMap CairoReg RegInfo, RegUseState)
-     collectionRes = collectCairoInstRegUses safeCalls [] (initial args,(initialApRegion,initialApRegion+1,0)) insts
-
-     hasSingleApRegion : Bool
-     hasSingleApRegion = (fst (snd collectionRes)) == initialApRegion
 
 SelectionState : Type
 SelectionState = (SortedMap CairoReg CairoReg,(Int, Int))
@@ -311,44 +300,36 @@ assignRegs state depth regs = foldl assignReg state regs
 
 mutual
     assignBlockRegs : SelectionState -> RegTreeBlock -> SelectionState
-    assignBlockRegs state block = assignNestedRegs
+    assignBlockRegs state block = foldl assignCaseRegs assignBlockLocatedRegs (values block.cases)
         where
          assignBlockLocatedRegs : SelectionState
          assignBlockLocatedRegs = assignRegs state (block.depth) (block.regs)
 
-         assignNestedRegs : SelectionState
-         assignNestedRegs = foldl assignCaseRegs assignBlockLocatedRegs (values block.cases)
-
     assignCaseRegs : SelectionState -> RegTreeCase -> SelectionState
-    assignCaseRegs state cases = mergeResults (assignNestedBranchesRegs assignCaseLocatedRegs)
+    assignCaseRegs state cases = let assignCaseLocatedRegs = assignRegs state (cases.depth) (cases.regs) in
+            mergeResults assignCaseLocatedRegs (assignNestedBranchesRegs assignCaseLocatedRegs)
         where
-         assignCaseLocatedRegs : SelectionState
-         assignCaseLocatedRegs = assignRegs state (cases.depth) (cases.regs)
-
          assignNestedBranchesRegs : SelectionState -> List SelectionState
          assignNestedBranchesRegs (_, counters) = map (assignBlockRegs (empty, counters)) (values cases.blocks)
 
          mergeStates : SelectionState -> SelectionState -> SelectionState
          mergeStates (mapping1, (nextLocal1, nextTemp1)) (mapping2, (nextLocal2, nextTemp2)) = (mergeLeft mapping1 mapping2, (max nextLocal1 nextLocal2, max nextTemp1 nextTemp2))
 
-         mergeResults : List SelectionState -> SelectionState
-         mergeResults branchResults = foldl mergeStates (fst assignCaseLocatedRegs, (0,0)) branchResults
+         mergeResults : SelectionState -> List SelectionState -> SelectionState
+         mergeResults init branchResults = foldl mergeStates (fst init, (0,0)) branchResults
 
-allocateRegisters : SortedSet Name -> (Name, CairoDef) -> List CairoReg -> List CairoInst -> (CairoDef, SortedSet Name)
-allocateRegisters safeCalls def@(n, _) args body= (updatedDef, updatedSafeCalls)
-    where collectedRegs : (SortedMap CairoReg RegInfo, Bool)
-          collectedRegs = collectRegUse safeCalls args body
-          builtTree : RegTreeBlock
-          builtTree = buildTree (fst collectedRegs)
-          assignedRegs : SelectionState
-          assignedRegs = assignBlockRegs (empty,(0,0)) builtTree
-          updatedDef : CairoDef
-          updatedDef = snd $ substituteDefRegisters (\reg => lookup reg (fst assignedRegs)) def
-          updatedSafeCalls : SortedSet Name
-          updatedSafeCalls = if (snd collectedRegs) then (insert n safeCalls) else safeCalls
+allocateRegisters : SortedSet CairoName -> (CairoName, CairoDef) -> List CairoReg -> List CairoInst -> (CairoDef, SortedSet CairoName)
+allocateRegisters safeCalls def@(n, _) args body = let collectedRegs = collectRegUse safeCalls args body in
+        (updatedDef (fst collectedRegs), updatedSafeCalls (snd collectedRegs))
+    where updatedDef : SortedMap CairoReg RegInfo -> CairoDef
+          updatedDef collected = let assignedRegs = fst (assignBlockRegs (empty,(0,0)) (buildTree collected)) in
+            snd $ substituteDefRegisters (\reg => lookup reg assignedRegs) def
+          updatedSafeCalls : Bool -> SortedSet CairoName
+          updatedSafeCalls True = insert n safeCalls
+          updatedSafeCalls False = safeCalls
 
 public export
-allocateCairoDefRegisters : SortedSet Name -> (Name, CairoDef) -> (CairoDef, SortedSet Name)
+allocateCairoDefRegisters : SortedSet CairoName -> (CairoName, CairoDef) -> (CairoDef, SortedSet CairoName)
 allocateCairoDefRegisters safeCalls def@(n, FunDef args _ _ body) = allocateRegisters safeCalls def args body
 allocateCairoDefRegisters safeCalls def@(n, ExtFunDef _ args _ _ body) = allocateRegisters safeCalls def args body
 allocateCairoDefRegisters safeCalls def@(n, ForeignDef info _ _) = if isApStable info

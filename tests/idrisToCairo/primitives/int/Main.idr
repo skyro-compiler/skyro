@@ -11,16 +11,25 @@ import Data.Bits
 %foreign
   """
   code:
-  func Main_f_3() -> (r):
+  func $name$() -> (r):
       return (3)
   end
   """
 f_3 : Felt
 
+%foreign
+  """
+  code:
+  func $name$() -> (r):
+      return (4)
+  end
+  """
+f_4 : Felt
+
 %foreign 
   """
   code:
-  func Main_f_100() -> (r):
+  func $name$() -> (r):
       return (100)
   end
   """
@@ -29,7 +38,7 @@ f_100 : Felt
 %foreign 
   """
   code:
-  func Main_f_50() -> (r):
+  func $name$() -> (r):
       return (50)
   end
   """
@@ -37,6 +46,9 @@ f_50 : Felt
 
 i8_3 : Int8
 i8_3 = cast {to=Int8} f_3
+
+i8_4 : Int8
+i8_4 = cast {to=Int8} f_4
 
 i8_100 : Int8
 i8_100 = cast {to=Int8} f_100
@@ -63,6 +75,18 @@ main = do
 
   out $ assert_total $ i8_3 `div` (the Int8 (-2))
   out $ assert_total $ i8_3 `mod` (the Int8 (-2))
+
+  out $ assert_total $ i8_4 `div` (the Int8 2)
+  out $ assert_total $ i8_4 `mod` (the Int8 2)
+
+  out $ assert_total $ (-i8_4) `div` (the Int8 (-2))
+  out $ assert_total $ (-i8_4) `mod` (the Int8 (-2))
+
+  out $ assert_total $ (-i8_4) `div` (the Int8 2)
+  out $ assert_total $ (-i8_4) `mod` (the Int8 2)
+
+  out $ assert_total $ i8_4 `div` (the Int8 (-2))
+  out $ assert_total $ i8_4 `mod` (the Int8 (-2))
 
   out $ i8_100 + i8_50 
   out $ i8_100 - i8_50

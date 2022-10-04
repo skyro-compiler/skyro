@@ -1,8 +1,7 @@
 module CodeGen.CodeGenHelper
 
-import Protocol.Hex
 import CairoCode.CairoCode
-import Core.Context
+import CairoCode.Name
 import CairoCode.CairoCodeUtils
 import Data.SortedMap
 import Data.SortedSet
@@ -51,9 +50,9 @@ compileConst (I16 x) = show x
 compileConst (I32 x) = show x
 compileConst (I64 x) = show x
 compileConst (F x) = show x 
-compileConst (BI x) = show x  -- Todo: We don't have BigInteger. Temporary hack until we have.
+compileConst (BI x) = assert_total $ idris_crash "Encountered Not Manifested Big Integer"
 compileConst (Ch x) = assert_total $ idris_crash "Char is not supported yet." 
-compileConst (Str x) = assert_total $ idris_crash "String is not supported yet."
+compileConst (Str x) = assert_total $ idris_crash "Encountered Not Manifested String Integer"
 -- compileConst (Named x) = x
 compileConst (B8 x) = show x
 compileConst (B16 x) = show x
@@ -158,10 +157,8 @@ impossibleCase reg msg = """
 
     """
 
-export
-extendName : Name -> String -> Name
-extendName (NS ns innerName) ext = NS ns (extendName innerName ext)
-extendName (Nested idx innerName) ext = Nested idx (extendName innerName ext)
-extendName (UN (Basic name)) ext = (UN (Basic (name ++ ext)))
-extendName (DN str name) ext =  DN (str++ext) (extendName name ext)
-extendName _ ext = assert_total $ idris_crash "Not supported for now"
+-- export
+-- extendName : CairoName -> String -> CairoName
+-- extendName (RawName ns name) ext = RawName ns (name ++ ext)
+-- extendName (Extension name iter rest) ext = Extension name iter (extendName rest ext)
+

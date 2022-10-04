@@ -13,7 +13,7 @@ data Memory : Type where [external]
     "imports:starkware.cairo.common.alloc alloc"
     """
     code:
-    func Common_Memory_createMemoryPrim(world) -> (world, res):
+    func $name$(world) -> (world, res):
         let (mem) = alloc()
         return (world, cast(mem,felt))
     end
@@ -29,7 +29,7 @@ createMemory = fromPrimCairo createMemoryPrim
     "apStable:True"
     """
     code:
-    func Common_Memory_writeMemoryPrim(offset, value, ptr, world) -> (world):
+    func $name$(offset, value, ptr, world) -> (world):
         assert [ptr+offset] = value
         return (world)
     end
@@ -46,7 +46,7 @@ writeMemory offset value ptr = fromPrimCairoUnit $ writeMemoryPrim offset value 
     "untupled:(_,_)"
     """
     code:
-    func Common_Memory_readMemoryPrim(offset, ptr, world) -> (world,res):
+    func $name$(offset, ptr, world) -> (world,res):
         let res = [ptr+offset]
         return (world, res)
     end

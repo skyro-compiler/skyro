@@ -1,45 +1,48 @@
 module CodeGen.CurryingBasedClosures
 
-import Core.Name.Namespace
-import Core.Context
+import CairoCode.Name
 import CodeGen.CodeGenHelper
 import CairoCode.CairoCode
 import CairoCode.CairoCodeUtils
 import Data.SortedMap
 import Data.SortedSet
+import Data.Maybe
+import Data.List
 import CommonDef
 import CairoCode.Traversal.Base
 import Utils.Helpers
 
 %hide Prelude.toList
 
-allClosures : List (Name, CairoDef) -> SortedMap Name Int
+-- Todo: if this gets to slow use custom SemiGroup for the Map
+allClosures : List (CairoName, CairoDef) -> SortedMap CairoName Int
 allClosures defs = snd $ runVisitConcatCairoDefs (pureTraversal closureInfoTraversal) defs
-    where closureInfoTraversal : InstVisit CairoReg -> SortedMap Name Int
+    where closureInfoTraversal : InstVisit CairoReg -> SortedMap CairoName Int
           closureInfoTraversal (VisitMkClosure _ name missing _) = singleton name (cast missing)
           closureInfoTraversal _ = empty
-          Semigroup Int where (<+>) = min
+          Semigroup Int where (<+>) = max
 
 extractOrderedImpls : CairoDef -> List LinearImplicit
 extractOrderedImpls (FunDef _ impls _ _) = keys impls
 extractOrderedImpls (ExtFunDef _ _ impls _ _) = keys impls
 extractOrderedImpls (ForeignDef (MkForeignInfo _ _ impls _ _) _ _) = impls
 
-extractImpls : (Name, CairoDef) -> (Name, SortedSet LinearImplicit)
+extractImpls : (CairoName, CairoDef) -> (CairoName, SortedSet LinearImplicit)
 extractImpls (n, def) = (n, fromList $ extractOrderedImpls def)
 
-extractClosureImplicits : List (Name, CairoDef) -> SortedSet LinearImplicit
+-- Todo: if this gets to slow use custom SemiGroup for the set
+extractClosureImplicits : List (CairoName, CairoDef) -> SortedSet LinearImplicit
 extractClosureImplicits defs = snd $ runVisitConcatCairoDefs (pureTraversal closureImplicitsTraversal) defs
-    where implicitLookup : SortedMap Name (SortedSet LinearImplicit)
+    where implicitLookup : SortedMap CairoName (SortedSet LinearImplicit)
           implicitLookup = fromList $ map extractImpls defs
           closureImplicitsTraversal : InstVisit CairoReg -> SortedSet LinearImplicit
           closureImplicitsTraversal (VisitMkClosure _ name _ _) = fromMaybe empty (lookup name implicitLookup)
           closureImplicitsTraversal _ = empty
 
-deriveCurriedClosureName : Name -> Int -> Name
-deriveCurriedClosureName name miss = MN ("curried__"++(cairoName name)) miss
+deriveCurriedClosureName : CairoName -> Int -> CairoName
+deriveCurriedClosureName name miss = extendName "curried" miss name
 
-generateCurriedBody : SortedMap LinearImplicit CairoReg -> Name -> Int -> List CairoInst
+generateCurriedBody : SortedMap LinearImplicit CairoReg -> CairoName -> Int -> List CairoInst
 generateCurriedBody outerImpls callTarget params = projects ++ [MKCLOSURE retReg callTarget 1 (paramRegs ++ [(Param 1)]), RETURN [retReg] outerImpls]
     where retReg : CairoReg
           retReg = Unassigned (Just "ret") 0 0
@@ -48,7 +51,7 @@ generateCurriedBody outerImpls callTarget params = projects ++ [MKCLOSURE retReg
           projects : List CairoInst
           projects = zipWith (\r,i => PROJECT r (Param 0) (cast i)) paramRegs (fromZeroTo (params - 1) )
 
-generateCallBody : SortedMap LinearImplicit CairoReg -> SortedSet LinearImplicit -> Name -> Int -> List CairoInst
+generateCallBody : SortedMap LinearImplicit CairoReg -> SortedSet LinearImplicit -> CairoName -> Int -> List CairoInst
 generateCallBody outerImpls innerImpls callTarget params = projects ++ [CALL retRegs implRegs callTarget (paramRegs ++ [(Param 1)]), RETURN retRegs retImpls]
     where retRegs : List CairoReg
           retRegs = [Unassigned (Just "ret") 0 0]
@@ -61,7 +64,7 @@ generateCallBody outerImpls innerImpls callTarget params = projects ++ [CALL ret
           projects : List CairoInst
           projects = zipWith (\r,i => PROJECT r (Param 0) (cast i)) paramRegs (fromZeroTo (params - 1) )
 
-generateClosureWrapperDefs : SortedSet LinearImplicit -> ((Name, CairoDef), Int) -> List (Name, CairoDef)
+generateClosureWrapperDefs : SortedSet LinearImplicit -> ((CairoName, CairoDef), Int) -> List (CairoName, CairoDef)
 generateClosureWrapperDefs impls ((name, FunDef params callImpls [_] _), 1) = (deriveCurriedClosureName name 1, FunDef [Param 0, Param 1] nImpls [CustomReg "applied_ret" Nothing] body)::Nil
    where nImpls : SortedMap LinearImplicit CairoReg
          nImpls = fromList $ map (\i => (i, implicitReg i)) (toList impls)
@@ -89,17 +92,17 @@ generateClosureWrapperDefs impls (def@(name, ForeignDef (MkForeignInfo _ _ callI
 generateClosureWrapperDefs _ ((_, ExtFunDef _ _ _ _ _), _) = assert_total $ idris_crash "ClosureGen: Closure targets can not be external"
 generateClosureWrapperDefs impls _ = assert_total $ idris_crash "ClosureGen: Closure targets must return a single value"
 
-generateClosureWrappers : SortedSet LinearImplicit -> List (Name, CairoDef) -> List (Name, CairoDef)
+generateClosureWrappers : SortedSet LinearImplicit -> List (CairoName, CairoDef) -> List (CairoName, CairoDef)
 generateClosureWrappers impls defs = affectedFunctions >>= (generateClosureWrapperDefs impls)
-    where affectedFunctions : List ((Name, CairoDef), Int)
+    where affectedFunctions : List ((CairoName, CairoDef), Int)
           affectedFunctions = map (\(n,m) => ((n, resolveDef n),m)) (toList $ allClosures defs)
-            where defLookup : SortedMap Name CairoDef
+            where defLookup : SortedMap CairoName CairoDef
                   defLookup = fromList defs
-                  resolveDef : Name -> CairoDef
+                  resolveDef : CairoName -> CairoDef
                   resolveDef name = fromMaybe (assert_total $ idris_crash "Currying: Should not happen") (lookup name defLookup)
 
 
-replaceClosureTarget : List (Name, CairoDef) -> List (Name, CairoDef)
+replaceClosureTarget : List (CairoName, CairoDef) -> List (CairoName, CairoDef)
 replaceClosureTarget defs = snd $ runVisitTransformCairoDefs (pureTraversal rewireTransform) defs
     where rewireTransform : InstVisit CairoReg -> List (InstVisit CairoReg)
           rewireTransform inst@(VisitMkClosure res name miss args) = [VisitMkClosure res (deriveCurriedClosureName name (cast miss)) 1 args]
@@ -108,39 +111,35 @@ replaceClosureTarget defs = snd $ runVisitTransformCairoDefs (pureTraversal rewi
 
 
 export
-preprocessClosures : List (Name, CairoDef) -> List (Name, CairoDef)
+preprocessClosures : List (CairoName, CairoDef) -> List (CairoName, CairoDef)
 preprocessClosures cairocode = (generateClosureWrappers impls cairocode) ++ nCairoCode
     where impls : SortedSet LinearImplicit
           impls = extractClosureImplicits cairocode
-          nCairoCode : List (Name, CairoDef)
+          nCairoCode : List (CairoName, CairoDef)
           nCairoCode = replaceClosureTarget cairocode
 
 
 export
-genMkClosure : String -> (res:CairoReg) -> Name -> (missing : Nat) -> (args : List CairoReg) -> String
+genMkClosure : String -> (res:CairoReg) -> CairoName -> (missing : Nat) -> (args : List CairoReg) -> String
 genMkClosure unique reg name 1 args = """
     #MKCLOSURE
-    const \{ targetAddr } = \{ targetName } - programStart
-    tempvar \{ ptrName } = new ( \{ showSep ", " (targetAddr::(map compileReg args)) }  )
+    let \{ targetAddr } = \{ targetName } - programStart
+    tempvar \{ ptrName } = new ( \{ separate ", " (targetAddr::(map compileReg args)) }  )
     \{ compileRegDeclRef reg } = cast(\{ ptrName },felt)
 
     """
     where targetName : String
-          targetName = cairoName name
+          targetName = asCairoIdent name
           targetAddr : String
           targetAddr = unique ++ "_addr_"
           ptrName : String
-          ptrName = compileReg reg ++ "_ptr_" ++ show (length args)
--- if compileRegDeclRef not works with cast then use \{ compileRegDecl reg } = cast(\{ compileReg reg }_ptr_,felt)
+          ptrName = compileReg reg ++ "_clo_" ++ show (length args)
+-- if compileRegDeclRef not works with cast then use \{ compileRegDecl reg } = cast(\{ compileReg reg }_clo_,felt)
 
 
-genMkClosure _ _ name _ _ = assert_total $ idris_crash "CurriedClosureGen: Target \{cairoName name} is not in curried form"
+genMkClosure _ _ name _ _ = assert_total $ idris_crash "CurriedClosureGen: Target \{show name} is not in curried form"
 
 
--- Todo: if jmpPointName is twice the same it fails
---       it seems that this worked earlier just like const (maybe their was a cairo change)
---   Hack - fix implemented by using all avaiable infos
---   For real fix a unique string needs to be passed in
 export
 genMkApply : String -> (res:CairoReg) -> LinearImplicitArgs -> (f : CairoReg) -> (a : CairoReg) -> String
 genMkApply unique r impls f a = """

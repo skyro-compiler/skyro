@@ -1,7 +1,6 @@
 module Optimisation.DataFlowOptimizer
 
-import Core.Context
-
+import CairoCode.Name
 import Utils.Helpers
 import CairoCode.Traversal.Base
 import CairoCode.CairoCode
@@ -10,6 +9,8 @@ import CommonDef
 import Data.SortedSet
 import Data.SortedMap
 import Data.Fin
+import Data.List
+import Data.Maybe
 
 import Debug.Trace
 import Optimisation.DataFlowAnalyser
@@ -91,7 +92,7 @@ analyseAllFlows flows = foldl processFlow empty flows
             Nothing => sfs
             (Just opt) => makeSpecialFormIndex opt sfs
 
-transformDef : SortedMap GlobalReg SpecialForm -> (Name, CairoDef) -> (Name, CairoDef)
+transformDef : SortedMap GlobalReg SpecialForm -> (CairoName, CairoDef) -> (CairoName, CairoDef)
 transformDef optims def@(name, _) = toCairoDef $ reverse $ fst $ foldl trackAndTransform (Nil, MkCTrack Nil Nil empty) (fromCairoDef def)
     where global : CairoReg -> GlobalReg
           global = MkGlobalReg name
@@ -147,9 +148,9 @@ transformDef optims def@(name, _) = toCairoDef $ reverse $ fst $ foldl trackAndT
           trackAndTransform : (List (InstVisit CairoReg), CaseTracker) -> InstVisit CairoReg -> (List (InstVisit CairoReg), CaseTracker)
           trackAndTransform (acc, track) inst = let nTrack = trackCase name inst track in ((transformInst nTrack inst)::acc, nTrack)
 
-transformDefs : SortedMap GlobalReg SpecialForm -> List (Name, CairoDef) -> List (Name, CairoDef)
+transformDefs : SortedMap GlobalReg SpecialForm -> List (CairoName, CairoDef) -> List (CairoName, CairoDef)
 transformDefs optims defs =  map (transformDef optims) defs
 
 public export
-deadDataEliminator : List (Name, CairoDef) ->  List (Name, CairoDef)
+deadDataEliminator : List (CairoName, CairoDef) ->  List (CairoName, CairoDef)
 deadDataEliminator defs = transformDefs (analyseAllFlows (dataFlowAnalysis defs)) defs

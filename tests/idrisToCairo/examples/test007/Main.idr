@@ -6,7 +6,7 @@ public export
 %foreign 
   """
   code:
-  func Main_knowsSecretFactors(x) -> (result):
+  func $name$(x) -> (result):
       tempvar a
       tempvar b
       %{

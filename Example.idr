@@ -7,7 +7,7 @@ import Cairo
   "untupled:(_,_)"
   """
   code:
-  func Main_cairo_identityPrim(key, world) -> (world, result):
+  func $name$(key, world) -> (world, result):
       return (world, result=key)
   end
   """

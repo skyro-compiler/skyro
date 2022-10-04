@@ -1,12 +1,12 @@
 module MainIR
 
-import Core.Context
+import CairoCode.Name
 import CairoCode.CairoCodeSerializer
 import CairoCode.CairoCodeParser
 import CommonDef
 import Data.Maybe
 
-import Main
+import Compiler
 import System
 import System.File
 import System.Path
@@ -84,7 +84,7 @@ main = do
   
   when (actualVerbose /= verbose) $ putStrLn "Parent directory of output file not found - cannot print Phases. \ESC[1;31mForcibly switching off verbose mode.\ESC[0m"
 
-  finalProgram <- compileIR target program actualVerbose phaseFolder
+  finalProgram <- compileIR Level2 target program actualVerbose phaseFolder
 
   Right () <- writeFile output finalProgram
     | Left err => do

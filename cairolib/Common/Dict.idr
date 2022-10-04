@@ -22,7 +22,7 @@ data LinDict : Type where
     "untupled:(_,_)"
     """
     code:
-    func Common_Dict_dnew(default_value, world) -> (world, dict):
+    func $name$(default_value, world) -> (world, dict):
         let (dict_ptr) = default_dict_new(default_value)
         return (world, cast(dict_ptr, felt))
     end
@@ -35,7 +35,7 @@ export
     "untupled:(_,_)"
     """
     code:
-    func Common_Dict_dread(dict, key) -> (dict, value):
+    func $name$(dict, key) -> (dict, value):
        let dict_end_ptr = cast(dict, DictAccess*)
        let (res) = dict_read{dict_ptr=dict_end_ptr}(key)
        return (cast(dict_end_ptr, felt), res)
@@ -48,7 +48,7 @@ export
     "imports:starkware.cairo.common.dict_access DictAccess, starkware.cairo.common.dict dict_write"
     """
     code:
-    func Common_Dict_dwrite(dict, key, value) -> (dict_ptr):
+    func $name$(dict, key, value) -> (dict_ptr):
        let dict_end_ptr = cast(dict, DictAccess*)
        dict_write{dict_ptr=dict_end_ptr}(key, value)
        return (cast(dict_end_ptr, felt))
@@ -61,7 +61,7 @@ dwrite : (1 d: LinDict) -> (key : Felt) -> (value : Felt) -> LinDict
     "linear_implicits:range_check_ptr"
     """
     code:
-    func Common_Dict_dverify(range_check_ptr, def_value, dict_start, dict_end, world) -> (world,range_check_ptr):
+    func $name$(range_check_ptr, def_value, dict_start, dict_end, world) -> (world,range_check_ptr):
         let (squashed_dict_start, squashed_dict_end) = default_dict_finalize{range_check_ptr=range_check_ptr}(
              cast(dict_start, DictAccess*), cast(dict_end,DictAccess*), def_value)
        return (world, range_check_ptr)

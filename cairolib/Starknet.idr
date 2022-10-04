@@ -28,7 +28,7 @@ import public Starknet.Types
 import public Starknet.Storage
 import public Starknet.Events
 import public Starknet.Syscall
-import public Starknet.ABI
+import public Starknet.Integration.ABI
 
 import Data.Maybe
 
@@ -50,12 +50,11 @@ View Cairo where
 public export %inline
 External Cairo where
   writeStorage = writeStorageHelper
-  emitEvent = emitEventHelper
+  writeEvent = emitEventHelper
   deploy = deployHelper
   callContract = callContractHelper
   libraryCall = libraryCallHelper
   libraryCallL1Handler = libraryCallL1HandlerHelper
-
 
 public export %inline
 Constructor Cairo where 

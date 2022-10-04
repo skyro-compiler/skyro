@@ -20,7 +20,7 @@ export %inline
     "linear_implicits:ecdsa_ptr"
     """
     code:
-    func Common_ECDSA_verifySignature(ecdsa_ptr, message, public_key, signature_r, signature_s) -> (message, ecdsa_ptr):
+    func $name$(ecdsa_ptr, message, public_key, signature_r, signature_s) -> (message, ecdsa_ptr):
        let ecdsa_ptr_ = cast(ecdsa_ptr, SignatureBuiltin*)
        verify_ecdsa_signature{ecdsa_ptr=ecdsa_ptr_}(message, public_key, signature_r, signature_s)
        return (message, cast(ecdsa_ptr_, felt))

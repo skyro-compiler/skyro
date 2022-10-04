@@ -6,7 +6,7 @@ public export
 %foreign 
   """
   code:
-  func Main_cheapSqrt(x) -> (result):
+  func $name$(x) -> (result):
       tempvar result
       %{
          import math

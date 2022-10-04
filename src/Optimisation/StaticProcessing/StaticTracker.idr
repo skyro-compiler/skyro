@@ -1,10 +1,12 @@
 module Optimisation.StaticProcessing.StaticTracker
 
-import Core.Context
+-- import Core.Context
+import CairoCode.Name
 import CairoCode.CairoCode
 import CairoCode.CairoCodeUtils
 
 import Data.List
+import Data.Maybe
 import Data.SortedSet
 import Data.SortedMap
 import Primitives.Primitives
@@ -30,7 +32,7 @@ mutual
         Const : (values: SortedSet CairoConst) -> StaticValue
         -- ctrs are all possible constructors
         Constructed : (ctrs: SortedMap Int (List StaticInfo)) -> StaticValue
-        Closure : (name: Maybe (Name, Nat)) -> (arguments: List StaticInfo) -> StaticValue
+        Closure : (name: Maybe (CairoName, Nat)) -> (arguments: List StaticInfo) -> StaticValue
         -- Allows repacking of Unknown Projections
         Field : (source: StaticInfo) -> (tag: Maybe Int) -> (fieldIndex: Nat) -> StaticValue
 
@@ -99,7 +101,7 @@ mutual
         where mergeFields: List StaticInfo -> List StaticInfo -> List StaticInfo
               mergeFields f1 f2 = zipWith (mergeStaticInfo fallback) f1 f2
     mergeStaticValue fallback (Closure n1 f1) (Closure n2 f2) = Closure (mergeNames n1 n2) (zipWith (mergeStaticInfo fallback) f1 f2)
-        where mergeNames : Maybe (Name, Nat) -> Maybe (Name, Nat) -> Maybe (Name, Nat)
+        where mergeNames : Maybe (CairoName, Nat) -> Maybe (CairoName, Nat) -> Maybe (CairoName, Nat)
               mergeNames (Just (n1, m1)) (Just (n2, m2)) = if n1 == n2 && m1 == m2 then Just (n1, m1) else Nothing
               mergeNames _ _ = Nothing
     -- todo: shall we go to Unknown if both tags are diff and remove maybe?
@@ -116,15 +118,37 @@ mutual
               merged = (intersection regs1 regs2)
               safeMerge : Maybe CairoReg -> SortedSet CairoReg
               safeMerge Nothing = merged
-              safeMerge (Just def) = if merged == empty
+              safeMerge (Just def) = let m = merged in
+               if m == empty
                 then singleton def
-                else merged
+                else m
 
 -- Used for merging scopes at the end of branches
 -- for other merges another fallback should be used
 export
 Semigroup StaticInfo where
    (<+>) = mergeStaticInfo (Just (Eliminated Unreachable))
+
+isActive : Int -> CairoReg -> Bool
+isActive depth (Unassigned n no l) = l <= depth
+isActive depth (Local no l) = l <= depth
+isActive depth (Let no l) = l <= depth
+isActive depth (Temp no l) = l <= depth
+isActive _ _ = True
+
+mutual
+    filterStaticInfo : Int -> StaticInfo -> StaticInfo
+    filterStaticInfo depth (MKStaticInfo sources value) = (MKStaticInfo (setFilter (isActive depth) sources) (filterStaticValue depth value))
+
+    filterStaticValue : Int -> StaticValue -> StaticValue
+    filterStaticValue depth (Constructed ctrs) = Constructed $ mapValueMap (map (filterStaticInfo depth)) ctrs
+    filterStaticValue depth (Closure name args) = Closure name $ map (filterStaticInfo depth) args
+    filterStaticValue depth (Field source tag fieldIndex) = Field (filterStaticInfo depth source) tag fieldIndex
+    filterStaticValue _ v = v
+
+export
+BranchAware StaticInfo where
+    leaveScope = filterStaticInfo
 
 export
 addBinding : StaticInfo -> CairoReg -> StaticInfo
@@ -137,14 +161,13 @@ addBinding (MKStaticInfo sources value) r = MKStaticInfo (insert r sources) valu
 export
 findRepackedSrcs : Int -> List StaticInfo -> SortedSet CairoReg
 findRepackedSrcs tag Nil = empty
-findRepackedSrcs tag args@(f::fs) = if isCons (toList combinedSrcRegs) && (isJust (foldl checkPosIncrementAndTag (Just 0) args))
-     then combinedSrcRegs
-     else empty
+findRepackedSrcs tag args@(f::fs) = let combinedSrcRegs = foldl1 intersection (map extractFieldSource (f::fs)) in
+        if isCons (toList combinedSrcRegs) && (isJust (foldl checkPosIncrementAndTag (Just 0) args))
+            then combinedSrcRegs
+            else empty
      where extractFieldSource : StaticInfo -> SortedSet CairoReg
            extractFieldSource (MKStaticInfo _ (Field src _ _ )) = src.sources
            extractFieldSource _ = empty
-           combinedSrcRegs : SortedSet CairoReg
-           combinedSrcRegs = foldl1 intersection (map extractFieldSource (f::fs))
            checkPosIncrementAndTag : Maybe Nat -> StaticInfo -> Maybe Nat
            checkPosIncrementAndTag (Just expectedPos) (MKStaticInfo _ (Field _ (Just t) pos )) = if expectedPos == pos && t == tag
              then Just (expectedPos+1)
@@ -159,21 +182,19 @@ extractSingleConstant (MKStaticInfo _ (Const cs)) = extractIfSameConstant (toLis
           extractIfSameConstant Nil = Nothing
           extractIfSameConstant (x::Nil) = Just x
           extractIfSameConstant _ = Nothing -- as is sorted set more then 1 elem means unequal
-extractSingleConstant (MKStaticInfo srcs _) = if isCons allConstants
-    then head' allConstants -- if they are more it is given that they are the same (otherwise the tracker screwed up)
-    else Nothing
+extractSingleConstant (MKStaticInfo srcs _) = let allConstants = (toList srcs) >>= toConst in
+        if isCons allConstants
+            then head' allConstants -- if they are more it is given that they are the same (otherwise the tracker screwed up)
+            else Nothing
     where toConst : CairoReg -> List CairoConst
           toConst (Const c) = [c]
           toConst _ = []
-          allConstants : List CairoConst
-          allConstants = (toList srcs) >>= toConst
 
 export
 asConstants : List StaticInfo -> Maybe (List CairoConst)
-asConstants args = if (all isJust mappedConstants) then Just (mappedConstants >>= maybeToList) else Nothing
-    where mappedConstants : List (Maybe CairoConst)
-          mappedConstants = (map extractSingleConstant args)
-          maybeToList : Maybe CairoConst -> List CairoConst
+asConstants args = let mappedConstants = (map extractSingleConstant args) in
+        if (all isJust mappedConstants) then Just (mappedConstants >>= maybeToList) else Nothing
+    where maybeToList : Maybe CairoConst -> List CairoConst
           maybeToList (Just a) = [a]
           maybeToList Nothing = []
 
@@ -258,9 +279,9 @@ staticValueTracker VisitEndFunction = pure ()
 
 -- This is non generic/local folder -- we keep for now: as it is simpler and more efficient
 export
-localStaticTrackDef : (Name, CairoDef) -> List StaticInfo
+localStaticTrackDef : (CairoName, CairoDef) -> List StaticInfo
 localStaticTrackDef def = collect $ snd $ runVisitConcatCairoDef (valueCollector idLens (dbgDef def) prepareB staticValueTracker extractReturn, initialTrackerState) def
-    where dbgDef : (Name, CairoDef) -> CairoReg -> StaticInfo
+    where dbgDef : (CairoName, CairoDef) -> CairoReg -> StaticInfo
           dbgDef (name, def) reg = trace "Register not bound in \{show name}: \{show reg}" (MKStaticInfo (singleton reg) Unknown)
           prepareB : CairoReg -> StaticInfo -> StaticInfo
           prepareB r rs = addBinding rs r
@@ -292,7 +313,7 @@ globalStateLens = MkLens globalState (\ts,fn => {globalState $= fn} ts)
 public export
 record CallData where
     constructor MKCallData
-    function: Name
+    function: CairoName
     depth : Int
     implicits: SortedMap LinearImplicit (StaticInfo, CairoReg)
     arguments : List StaticInfo
@@ -318,15 +339,14 @@ interface CallTracker s where
 
 export
 trackCall : CallTracker s => CallData -> Traversal (GlobalStaticTrackerState s) (List StaticInfo, SortedMap LinearImplicit StaticInfo)
-trackCall callData = update >>= (\_ => compute)
+trackCall callData = let compute = map (track callData) (readStateL globalStateLens) in
+        update >>= (\_ => compute)
     where update : Traversal (GlobalStaticTrackerState s) ()
           update = updateStateL globalStateLens (process callData)
-          compute : Traversal (GlobalStaticTrackerState s) (List StaticInfo, SortedMap LinearImplicit StaticInfo)
-          compute = map (track callData) (readStateL globalStateLens)
 
 export
-globalStaticTrackDef : CallTracker s => SortedMap Name CairoDef -> s -> (Name, CairoDef) -> (s, List StaticInfo)
-globalStaticTrackDef defs globalState def = collect $ runVisitConcatCairoDef (valueCollector bindingStateLens (dbgDef def) prepareB customizedStaticValueTracker extractReturn, initialState) def
+globalStaticTrackDef : CallTracker s => s -> (CairoName, CairoDef) -> (s, List StaticInfo)
+globalStaticTrackDef globalState def = collect $ runVisitConcatCairoDef (valueCollector bindingStateLens (dbgDef def) prepareB customizedStaticValueTracker extractReturn, initialState) def
           -- these just lift traversals defined on (ScopedBindings StaticInfo) to work with (GlobalStaticTrackerState s) by using a lense to point to the LocalStaticOptimState
     where liftedStaticValueTracker: (v:InstVisit StaticInfo) -> Traversal (GlobalStaticTrackerState s) (ValBindType v StaticInfo)
           liftedStaticValueTracker inst = composeState bindingStateLens (staticValueTracker inst)
@@ -337,7 +357,7 @@ globalStaticTrackDef defs globalState def = collect $ runVisitConcatCairoDef (va
           customizedStaticValueTracker (VisitFunction _ _ params impls _) = map (context (params, impls)) (readStateL globalStateLens)
           customizedStaticValueTracker (VisitReturn res impls) = updateStateL globalStateLens (process_return res impls)
           customizedStaticValueTracker inst = liftedStaticValueTracker inst
-          dbgDef : (Name, CairoDef) -> CairoReg -> StaticInfo
+          dbgDef : (CairoName, CairoDef) -> CairoReg -> StaticInfo
           dbgDef (name, def) reg = trace "Register not bound in \{show name}: \{show reg}" (MKStaticInfo (singleton reg) Unknown)
           prepareB : CairoReg -> StaticInfo -> StaticInfo
           prepareB r rs = addBinding rs r

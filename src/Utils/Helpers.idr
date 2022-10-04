@@ -39,7 +39,6 @@ export
 valueFilter : Ord k => (a -> Bool) -> SortedMap k a -> SortedMap k a
 valueFilter fn mapv = mapFilter (fn . snd) mapv
 
-
 export
 [dropDuplicateKeysSemigroup] Semigroup (SortedMap k v) where
   (<+>) = mergeLeft

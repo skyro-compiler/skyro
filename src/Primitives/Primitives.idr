@@ -19,14 +19,14 @@ import CommonDef
 [no_op] PrimFn where
   eval [_] = Just $ ArgValue 0 
   eval _ = Nothing
-
+  -- todo: do we need to manifest consts
   generateCode _ r [a] _ = Raw "\{ compileRegDecl r } = \{ compileReg a } # no_op\n"
   generateCode _ _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode no_op"
 
 [believeme] PrimFn where
   eval [_,_,_] = Just $ ArgValue 2 -- Do nothing, trust that it works :)
   eval _ = Nothing
-
+  -- todo: do we need to manifest consts
   generateCode _ r [_,_,a] _ = Raw "\{ compileRegDecl r } = \{ compileReg a } # believeme\n"
   generateCode _ _ _ _ = assert_total $ idris_crash "Bad arguments to generateCode believeme"
 
@@ -377,11 +377,22 @@ generatePrimFnCode fn = dispatch fn generateCode
 [default_manifest] ConstReg where
     -- all defaults
 
+
+
+public export
+[manifestNotImplemented] ConstReg where
+    assignConstantReg resReg _ = impossibleCase resReg "Can not manifest string or char: Not yet implemented"
+    manifestConstantReg unique (Const c) = (Just (assignConstantReg resReg c), resReg)
+        where resReg : CairoReg
+              resReg = CustomReg unique Nothing
+    manifestConstantReg _ r = assert_total $ idris_crash $ "Not a constant: " ++ (show r)
+
+
 export
 manifestConstReg : String -> CairoReg -> (Maybe String, CairoReg)
 manifestConstReg unique r@(Const (BI _)) = manifestConstantReg @{manifestBigInteger} unique r
-manifestConstReg unique r@(Const (Str _)) = assert_total $ idris_crash $ "Strings not yet implemented"
-manifestConstReg unique r@(Const (Ch _)) = assert_total $ idris_crash $ "Characters Integers not yet implemented"
+manifestConstReg unique r@(Const (Str _)) = trace "Strings are not yet supported" (manifestConstantReg @{manifestNotImplemented} unique r)
+manifestConstReg unique r@(Const (Ch _)) = trace "Characters are not yet supported" (manifestConstantReg @{manifestNotImplemented} unique r)
 manifestConstReg unique r@(Const _) = manifestConstantReg @{default_manifest} unique r
 manifestConstReg unique r = assert_total $ idris_crash $ "Not a constant: " ++ (show r)
 
@@ -389,6 +400,6 @@ manifestConstReg unique r = assert_total $ idris_crash $ "Not a constant: " ++ (
 export
 assignConstReg : CairoReg -> CairoConst -> String
 assignConstReg r c@(BI _) = assignConstantReg @{manifestBigInteger} r c
-assignConstReg r c@(Str _) = assert_total $ idris_crash $ "Strings not yet implemented"
-assignConstReg r c@(Ch _) = assert_total $ idris_crash $ "Characters Integers not yet implemented"
+assignConstReg r c@(Str _) = trace "Strings are not yet supported" (assignConstantReg @{manifestNotImplemented} r c)
+assignConstReg r c@(Ch _) = trace "Characters are not yet supported" (assignConstantReg @{manifestNotImplemented} r c)
 assignConstReg r c = assignConstantReg @{default_manifest} r c

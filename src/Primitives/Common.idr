@@ -1,11 +1,12 @@
 module Primitives.Common
 
-import Core.Context
+import CairoCode.Name
 import CairoCode.CairoCode
 import CairoCode.CairoCodeUtils
 import CommonDef
 import Data.SortedSet
 import Data.SortedMap
+import Data.List
 import CodeGen.CodeGenHelper
 import Debug.Trace
 
@@ -18,7 +19,7 @@ data ValueInfo : Type where
      UnknownValue : ValueInfo
      ConstValue : CairoConst -> ValueInfo
      CompositeValue : (tag:Int) -> List ValueInfo -> ValueInfo
-     ClosureValue : Name -> (missing:Nat) -> List ValueInfo -> ValueInfo
+     ClosureValue : CairoName -> (missing:Nat) -> List ValueInfo -> ValueInfo
 
 public export
 data EvalRes : Type where
@@ -65,8 +66,8 @@ interface ConstReg where
         else compileConstRegDecl r ++ " = \{ compileConst c }\n"
 
 export
-makeBuiltinName : String -> Name
-makeBuiltinName fnName = (UN $ Basic fnName)
+makeBuiltinName : String -> CairoName
+makeBuiltinName fnName = externalName fnName
 
 export
 genRuntimeNote : Maybe (String -> (res:CairoReg) -> (args:List CairoReg) -> LinearImplicitArgs -> PrimFnCode)

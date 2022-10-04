@@ -5,7 +5,7 @@ Skyro compiles programs written in [Idris2](https://github.com/idris-lang/Idris2
 
 We strongly believe that Cairo as a technology could have a big impact on society (trust in math, not companies and not governments) and we think that typed, pure functional programming is currently the best way to write programs in general.
 
-⚠️ Disclaimer: This is experimental software and there will be bugs! Use at your own risk!
+⚠️ Disclaimer: This is experimental software and there may be bugs! Use at your own risk!
 
 ## High-level, typed functional programming
 Idris2 is a state of the art functional programming language. It supports algebraic data types, pattern matching, higher order functions, an extraordinary expressive type system and much more ([check their documentation](https://idris2.readthedocs.io/en/latest/tutorial/index.html)).
@@ -26,7 +26,7 @@ record Account where
 %foreign 
   """
   code:
-  func Main_readFromInput(key) -> (result):
+  func $name$(key) -> (result):
       tempvar result
       %{  
           from starkware.cairo.common.math_utils import as_int
@@ -93,6 +93,9 @@ Implicits are tracked and injected automatically, no need for manual handling of
 ### Foreign Function Interface (FFI)
 FFI is the mechanism to call functions written in Cairo from Idris2. See [test011/Main.idr](tests/idrisToCairo/examples/test011/Main.idr) as an example.
 
+### Optimisations
+Skyro is an optimizing compiler and aims to produce efficient code
+
 ## StarkNet
 StarkNet contract programming is now supported!
 Here is an example:
@@ -143,18 +146,17 @@ contract_test.py .                                                       [100%]
 - Support for storage variables.
 - Expressive datatypes (records and variants) are supported in the interface (parameter and return types of functions, keys and values of events and storage variables).
 
-
 ## What's missing / limitations
 - Primitive types and operations:
   - `String` and `Char` are not yet supported. 
-  - Patternmatching on `Felt` emits a warning and does not work.
+  -  Patternmatching on `Felt` emits a warning and does not work.
   - `Felt` is a field element and by definition has no defined `Ord`ering.
   - `Felt` does not have bitwise operations (because Cairo bitwise builtin is not defined over the whole range of Felt).
 - Standard library:
   - Currently we expose the whole Idris2 prelude (except `IO`), this needs to be refined.
   - Most cairo specific functionality is currently offered in a primitive form although Idris2 would allow the definition of very elegant and typesafe abstractions and APIs. These need to be worked out.
 - StarkNet:
-  - Cross contract / library calls are possible using raw syscall functions. A much more convenient and typesafe interface mechanism should be provided.
+  - Cross contract / library calls are possible using raw syscall functions. A much more convenient and typesafe interface mechanism should be provided. (See:  [test026/Main.idr](tests/idrisToCairo/examples/test026/Main.idr))
   - Operations on numeric types other then `Felt` (e.g. `Int32`, `Integer`) use hints in their implementation but are not whitelisted. They won't work on StarkNet.
   - The generated code uses `@raw_input`, `@raw_output`, therefore the generated ABI appears unstructured. This needs improvement.
 - Testing: 
@@ -163,10 +165,34 @@ contract_test.py .                                                       [100%]
 - Documentation:
   - Skyro needs an onboarding tutorial.
   - More documentation about the implementation is also required.
+- Cairo Version:
+  - Compiles to cairo version v0.9.1 and v0.10.0 is not yet supported
 
 ## Contribution
 If you find a problem we are happy if you would open an issue with a small example.
 We are also happy to take pull requests!
+
+## Known Problems / Behaviours
+
+#### Unsupported String Message
+When using idris_crash "Error Message" Strings are used which the compiler can not handle yet.
+However, this use of Strings compiles and works, as idris_crash aborts anyway.
+By choosing a higher Optimisation Level the Skyro compiler can often optimize the unused String away, eliminating the message in the process.
+
+#### Hint not Whitelisted
+When using primitives other than Felts or FFI function with hints the result can not be deployed on Starknet because the hints are not whitelisted.
+They can still be tested locally by setting the "disable_hint_validation" to true.
+
+#### Access denied / File not found
+When the install process of Skyro fails because of a failed file access, it may be that the windows file endings were used on the git check out. Make sure that the linux file endings are preserved ([link](https://docs.github.com/en/get-started/getting-started-with-git/configuring-git-to-handle-line-endings)).
+
+#### Long Compilation Runs
+Some of the optimisations, especially those used in the optimisation level O3 can run very in niche cases. In that case a lower optimisation level should be used.
+
+#### Compiled code produces wrong result or crashes
+When pattern matching on felt is used only a warning is produced and the resulting code is not semantically correct.
+On consecutive compilation steps the warning may no longer be shown if the problematic file did not change. This is a bug in the Idris2 compiler and not in Skyro.
+Further, the compiler is experimental and it is possible that their is a bug. However, more often then not this results in a compilation error either in Skyro or Cairo and rarely in semantically incorrect code.
 
 ## Questions and Answers
 
@@ -250,7 +276,14 @@ Argument description:
  - `Example.idr` the Idris2 program to compile
  - `-o Example.cairo` the resulting Cairo program (default location ./build/exec/Exanple.cairo)
 
-To compile a StarkNet contract, add `--directive starknet`.
+Optional:
+ - To compile a StarkNet contract, add `--directive starknet`.
+ - To generate compiler debugging and timing information, add `--directive verbose`.
+ - To change the optimisation level, add `--directive $level$`. Where $level$ is:
+   - quick or O0 (no optimisation)
+   - dev or O1 (non expensive optimisation)
+   - prod or O2 (default - all except for some overly aggressive & experimental optimisations)
+   - aggressive or O3 (all optimisations and some size and iteration limits are disabled)
 
 Compile Cairo to AIR and execute AIR:
 
@@ -285,8 +318,12 @@ To build the compiler within a docker image, execute the following command:
 > docker build --platform linux/amd64 . -t skyro
 ```
 
+- `--platform linux/amd64` is required on Apple M1 hardware because `chezscheme` is not available on arm.
+
 ### Usage
 To run the compiler within docker, put your source into the `docker-compile` folder (e.g. `docker-compile/Example.idr`) and run the following command:
+
+Add the `--directive starknet` argument if the target file is a StarkNet contract.
 
 Linux / macOS:
 ```
@@ -295,7 +332,7 @@ Linux / macOS:
 
 Windows:
 ```
-docker run --rm -it -v %cd%/docker-compile:/app/docker-compile skyro idrisToCairo --no-prelude -p cairolib /app/docker-compile/Example.idr -o /app/docker-compile/Example.cairo
+> docker run --rm -it -v %cd%/docker-compile:/app/docker-compile skyro idrisToCairo --no-prelude -p cairolib /app/docker-compile/Example.idr -o /app/docker-compile/Example.cairo
 ```
 
 ## Hack on the compiler source
@@ -324,7 +361,7 @@ Windows:
 ### Run tests
 Linux / macOS:
 ```
-> docker run --platform linux/amd64 -v $(pwd):/app/ skyro-env /app/docker-bin/skyro-test.sh
+> docker run --platform linux/amd64 -v $(pwd):/app/ skyro /app/docker-bin/skyro-test.sh
 ```
 Windows:
 ```
@@ -334,7 +371,7 @@ Windows:
 ### Clean build artifacts
 Linux / macOS:
 ```
-> docker run --platform linux/amd64 -v $(pwd):/app/ skyro-env /app/docker-bin/skyro-clean.sh
+> docker run --platform linux/amd64 -v $(pwd):/app/ skyro /app/docker-bin/skyro-clean.sh
 ```
 Windows:
 ```
@@ -343,7 +380,6 @@ Windows:
 
 # Credits
 Skyro is developed at the [University of Applied Sciences and Arts Northwestern Switzerland (FHNW)](https://www.fhnw.ch/en/about-fhnw/schools/school-of-engineering/institutes/institute-of-mobile-and-distributed-systems) 
-
 
 
 <img src="https://www.fhnw.ch/en/++theme++web16theme/assets/media/img/university-applied-sciences-arts-northwestern-switzerland-fhnw-logo.svg" alt="FHNW logo" height="50"/>

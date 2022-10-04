@@ -1,7 +1,7 @@
 FILE_NAME=$1
 TEST_DIRECTORY=$(dirname $(readlink -f $0))
 CURRENT_TEST=$(realpath --relative-to=$TEST_DIRECTORY $(pwd))
-TIMEOUT=${2:-${TEST_TIMEOUT:-30}}
+TIMEOUT=${2:-${TEST_TIMEOUT:-60}}
 IDRIS_COMPILE_ERR=0
 
 # source is only required if used outside of docker
@@ -9,12 +9,13 @@ IDRIS_COMPILE_ERR=0
 # However, were this to be fixed, the virtual-evironment stops correctly formatting files - it doesn't leave a gap between "new" and the (, making cairo-compile FAIL!
 [ -f ~/cairo_venv/bin/activate ] && source ~/cairo_venv/bin/activate
 rm -rf ./build/*
+mkdir -p ./build/exec
 
 set -e
 
 # Todo: add variable to the location of the idrisToCairo binary 
 # Further options: --dumpanf anf.txt
-timeout $TIMEOUT ../../../../build/exec/idrisToCairo --no-prelude -p cairolib --cg cairo $FILE_NAME.idr -o Main.cairo_unformatted || IDRIS_COMPILE_ERR=$?
+timeout $TIMEOUT ../../../../build/exec/idrisToCairo --directive O3 --no-prelude -p cairolib --cg cairo $FILE_NAME.idr -o $FILE_NAME.cairo_unformatted || IDRIS_COMPILE_ERR=$?
 if [ $IDRIS_COMPILE_ERR -eq 124 ]; then
     echo "\033[48;5;088;1;37mTimeout after $TIMEOUT seconds when trying to compile $CURRENT_TEST from Idris.\033[0m" >&2
     exit 1

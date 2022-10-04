@@ -6,7 +6,8 @@ import Primitives.Externals
 import Primitives.Primitives
 import Data.SortedMap
 import Data.SortedSet
-import Core.Context
+import Data.Maybe
+import CairoCode.Name
 import CairoCode.Traversal.Base
 import CairoCode.Traversal.Composition
 import Utils.Lens
@@ -14,15 +15,16 @@ import Utils.Helpers
 
 %hide Prelude.toList
 
-extractImpls : (Name, CairoDef) -> (Name, SortedSet LinearImplicit)
+extractImpls : (CairoName, CairoDef) -> (CairoName, SortedSet LinearImplicit)
 extractImpls (n, FunDef _ impls _ _) = (n, fromList $ keys impls)
 extractImpls (n, ExtFunDef _ _ impls _ _) = (n, fromList $ keys impls)
 extractImpls (n, ForeignDef (MkForeignInfo _ _ impls _ _) _ _) = (n, fromList impls)
 
-preloadLinearImplicitsDefs : List (Name, CairoDef) -> SortedMap Name (SortedSet LinearImplicit)
+preloadLinearImplicitsDefs : List (CairoName, CairoDef) -> SortedMap CairoName (SortedSet LinearImplicit)
 preloadLinearImplicitsDefs defs = fromList $ map extractImpls defs
 
-collectApplyLinearImplicits : SortedMap Name (SortedSet LinearImplicit) -> List (Name, CairoDef) -> SortedSet LinearImplicit
+-- Todo: if this gets to slow use custom SemiGroup for the set
+collectApplyLinearImplicits : SortedMap CairoName (SortedSet LinearImplicit) -> List (CairoName, CairoDef) -> SortedSet LinearImplicit
 collectApplyLinearImplicits implicitLookup defs = snd $ runVisitConcatCairoDefs (pureTraversal closureCollectTraversal) defs
     where closureCollectTraversal : InstVisit CairoReg -> SortedSet LinearImplicit
           closureCollectTraversal (VisitMkClosure _ name _ _ ) = fromMaybe empty (lookup name implicitLookup)
@@ -33,13 +35,14 @@ starkNetIntrinsicsNeededImplicits : StarkNetIntrinsic -> SortedSet LinearImplici
 -- Note: StorageVarAddr cairo functions take builtins, however unless they have arguments, they do not use them & ours do not have arguments
 starkNetIntrinsicsNeededImplicits (StorageVarAddr _) = empty -- fromList [pedersen_builtin, range_check_builtin]
 starkNetIntrinsicsNeededImplicits (EventSelector _) = empty -- fromList [pedersen_builtin, range_check_builtin]
+starkNetIntrinsicsNeededImplicits (FunctionSelector _) = empty
 
-
-discoverNeededLinearImplicitsDef : SortedMap Name (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (Name, CairoDef) -> SortedSet LinearImplicit
+-- Todo: if this gets to slow use custom SemiGroup for the set
+discoverNeededLinearImplicitsDef : SortedMap CairoName (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (CairoName, CairoDef) -> SortedSet LinearImplicit
 discoverNeededLinearImplicitsDef implicitLookup applyLinearImplicits def = snd $ runVisitConcatCairoDef (pureTraversal neededLinearImplicits) def
       where exludeExisting : SortedSet LinearImplicit -> LinearImplicitArgs -> SortedSet LinearImplicit
             exludeExisting needed existing = difference needed (fromList $ keys existing)
-            lookupLinearImplicits : Name -> SortedSet LinearImplicit
+            lookupLinearImplicits : CairoName -> SortedSet LinearImplicit
             lookupLinearImplicits name = fromMaybe empty (lookup name implicitLookup)
             definedImpls : List LinearImplicit
             definedImpls = toList $ snd $ extractImpls def
@@ -55,9 +58,9 @@ discoverNeededLinearImplicitsDef implicitLookup applyLinearImplicits def = snd $
                  else empty
             neededLinearImplicits _ = empty
 
-discoverNeededLinearImplicitsDefs : SortedMap Name (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> List (Name, CairoDef) -> SortedMap Name (SortedSet LinearImplicit)
+discoverNeededLinearImplicitsDefs : SortedMap CairoName (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> List (CairoName, CairoDef) -> SortedMap CairoName (SortedSet LinearImplicit)
 discoverNeededLinearImplicitsDefs implicitLookup applyLinearImplicits defs = foldl processCheckAndUpdateDef implicitLookup defs
-    where processCheckAndUpdateDef : SortedMap Name (SortedSet LinearImplicit) -> (Name, CairoDef) -> SortedMap Name (SortedSet LinearImplicit)
+    where processCheckAndUpdateDef : SortedMap CairoName (SortedSet LinearImplicit) -> (CairoName, CairoDef) -> SortedMap CairoName (SortedSet LinearImplicit)
           processCheckAndUpdateDef currentLookup def@(name,_) = updateDef $ discoverNeededLinearImplicitsDef currentLookup applyLinearImplicits def
                 where definedImpls : SortedSet LinearImplicit
                       definedImpls = snd $ extractImpls def
@@ -65,23 +68,23 @@ discoverNeededLinearImplicitsDefs implicitLookup applyLinearImplicits defs = fol
                       checkedImpls discoveredLinearImplicits = if all (\i => not (contains i definedImpls)) discoveredLinearImplicits
                         then discoveredLinearImplicits
                         else assert_total $ idris_crash ("predefined implicits do not cover all instructions")
-                      updateDef : SortedSet LinearImplicit -> SortedMap Name (SortedSet LinearImplicit)
+                      updateDef : SortedSet LinearImplicit -> SortedMap CairoName (SortedSet LinearImplicit)
                       updateDef discoveredLinearImplicits = insert name (union (checkedImpls discoveredLinearImplicits) (fromMaybe empty (lookup name currentLookup))) currentLookup
 
-singleDiscoveryRun : SortedMap Name (SortedSet LinearImplicit) -> List (Name, CairoDef) -> (SortedSet LinearImplicit, SortedMap Name (SortedSet LinearImplicit))
+singleDiscoveryRun : SortedMap CairoName (SortedSet LinearImplicit) -> List (CairoName, CairoDef) -> (SortedSet LinearImplicit, SortedMap CairoName (SortedSet LinearImplicit))
 singleDiscoveryRun implicitLookup defs = (appliedLinearImplicits, discoverNeededLinearImplicitsDefs implicitLookup appliedLinearImplicits defs)
     where appliedLinearImplicits : SortedSet LinearImplicit
           appliedLinearImplicits = collectApplyLinearImplicits implicitLookup defs
 
-repeatedDiscoveryRun : SortedMap Name (SortedSet LinearImplicit) -> List (Name, CairoDef) -> (SortedSet LinearImplicit, SortedMap Name (SortedSet LinearImplicit))
+repeatedDiscoveryRun : SortedMap CairoName (SortedSet LinearImplicit) -> List (CairoName, CairoDef) -> (SortedSet LinearImplicit, SortedMap CairoName (SortedSet LinearImplicit))
 repeatedDiscoveryRun implicitLookup defs = if (snd runResult) == implicitLookup
     then runResult
     else repeatedDiscoveryRun (snd runResult) defs
-    where runResult : (SortedSet LinearImplicit, SortedMap Name (SortedSet LinearImplicit))
+    where runResult : (SortedSet LinearImplicit, SortedMap CairoName (SortedSet LinearImplicit))
           runResult = singleDiscoveryRun implicitLookup defs
 
 -- This does the discovery of all implicits needed per Name
-executeLinearImplicitDiscovery : List (Name, CairoDef) -> (SortedSet LinearImplicit, SortedMap Name (SortedSet LinearImplicit))
+executeLinearImplicitDiscovery : List (CairoName, CairoDef) -> (SortedSet LinearImplicit, SortedMap CairoName (SortedSet LinearImplicit))
 executeLinearImplicitDiscovery defs = repeatedDiscoveryRun (preloadLinearImplicitsDefs defs) defs
 
 -- Note: SortedMap CairoReg CairoReg only needed as Optimisation can not do forward substitution at branch border:
@@ -131,7 +134,7 @@ enterBranch tc = do
     beforeReg <- getCurrentReg
     depth <- getDepth
     regGen <- readStateL activeRegGenLens
-    let nextRegAndGen = nextRegister (branchRegisterGen tc regGen) depth
+    let nextRegAndGen = nextRegister (branchRegisterGen tc regGen) (depth+1)
     _ <- updateStateL stackLens (nextRegAndGen::)
     afterReg <- getCurrentReg
     pure (beforeReg, afterReg)
@@ -144,7 +147,7 @@ leaveBranch = updateState update
             MkRegTrackerState ((reg,regGen)::xs) (insert branchReg (fst $ nextRegister regGen (cast $ length xs)) subst)
           update _ = assert_total $ idris_crash "Illegal Active State"
 
-implicitRegTransformer : SortedSet Name -> Bool -> LinearImplicit -> (InstVisit CairoReg -> Traversal RegTrackerState (List (InstVisit CairoReg)))
+implicitRegTransformer : SortedSet CairoName -> Bool -> LinearImplicit -> (InstVisit CairoReg -> Traversal RegTrackerState (List (InstVisit CairoReg)))
 implicitRegTransformer neededByCall neededByApply impl = implicitRegInjector
     where implicitRegInjector : InstVisit CairoReg -> Traversal RegTrackerState (List (InstVisit CairoReg))
           implicitRegInjector (VisitFunction name tags params linImpls rets) = map (\r => [VisitFunction name tags params (insert impl r linImpls) rets]) getCurrentReg
@@ -174,39 +177,37 @@ areAppliesAffected : LinearImplicit -> SortedSet LinearImplicit -> Bool
 areAppliesAffected = contains
 
 
-transformLinearImplicits : LinearImplicit -> SortedMap Name (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (Name, CairoDef) -> SortedMap LinearImplicit CairoReg -> (Name, CairoDef)
+transformLinearImplicits : LinearImplicit -> SortedMap CairoName (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (CairoName, CairoDef) -> SortedMap LinearImplicit CairoReg -> (CairoName, CairoDef)
 transformLinearImplicits impl functionImpls applyImpls def@(name, _ ) linImpls = if isJust (lookup impl linImpls)
     then def -- is already present no need to inject
-    else substituteDefRegisters substituteReg (snd result)
-    where affectedCalls : SortedSet Name
-          affectedCalls = fromList ((toList functionImpls) >>= (\(n,linImpls) => if contains impl linImpls then [n] else []))
-          areAppliesAffected : Bool
-          areAppliesAffected = contains impl applyImpls
-          transformer : InstVisit CairoReg -> Traversal RegTrackerState (List (InstVisit CairoReg))
-          transformer = implicitRegTransformer affectedCalls areAppliesAffected impl
+    else let affectedCalls = fromList ((toList functionImpls) >>= (\(n,linImpls) => if contains impl linImpls then [n] else [])) in
+         let areAppliesAffected = contains impl applyImpls in
+         let (tracker, resDef) = runVisitTransformCairoDef (rawTraversal (transformer affectedCalls areAppliesAffected) initialState) def in
+         substituteDefRegisters (substituteReg (subst tracker)) resDef
+    where transformer : SortedSet CairoName -> Bool -> InstVisit CairoReg -> Traversal RegTrackerState (List (InstVisit CairoReg))
+          transformer affectedCalls areAppliesAffected = implicitRegTransformer affectedCalls areAppliesAffected impl
           initialState : RegTrackerState
           initialState = MkRegTrackerState ((CustomReg (implicitName impl) Nothing, ("implicit_" ++ (implicitName impl), 0))::Nil) empty
-          result : (RegTrackerState, (Name, CairoDef))
-          result = runVisitTransformCairoDef (rawTraversal transformer initialState) def
-          substituteReg : CairoReg -> Maybe CairoReg
+          -- Todo: Maybe handle Eliminated specially like in inline?
+          substituteReg : SortedMap CairoReg CairoReg -> CairoReg -> Maybe CairoReg
           -- call recursively to ensure we end up with the final substitution
-          substituteReg reg = maybeMap (\r => fromMaybe r (substituteReg r)) (lookup reg (subst (fst result)))
+          substituteReg subst reg = maybeMap (\r => fromMaybe r (substituteReg subst r)) (lookup reg subst)
 
-transformLinearImplicitDef : LinearImplicit -> SortedMap Name (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (Name, CairoDef) -> (Name, CairoDef)
+transformLinearImplicitDef : LinearImplicit -> SortedMap CairoName (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (CairoName, CairoDef) -> (CairoName, CairoDef)
 transformLinearImplicitDef impl functionImpls applyImpls def@(name, FunDef _ linImpls _ _) = transformLinearImplicits impl functionImpls applyImpls def linImpls
 transformLinearImplicitDef impl functionImpls applyImpls def@(name, ExtFunDef _ _ linImpls _ _) = transformLinearImplicits impl functionImpls applyImpls def linImpls
 transformLinearImplicitDef _ _ _ def = def
 
-transformDef : SortedMap Name (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (Name, CairoDef) -> (Name, CairoDef)
+transformDef : SortedMap CairoName (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> (CairoName, CairoDef) -> (CairoName, CairoDef)
 transformDef functionImpls applyImpls def@(name,_) = foldl (\d,impl => transformLinearImplicitDef impl functionImpls applyImpls d) def requiredImpls
     where requiredImpls : SortedSet LinearImplicit
           requiredImpls = fromMaybe empty (lookup name functionImpls)
 
-transformDefs : SortedMap Name (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> List (Name, CairoDef) -> List (Name, CairoDef)
+transformDefs : SortedMap CairoName (SortedSet LinearImplicit) -> SortedSet LinearImplicit -> List (CairoName, CairoDef) -> List (CairoName, CairoDef)
 transformDefs functionImpls applyImpls defs = map (transformDef functionImpls applyImpls) defs
 
 export
-injectLinearImplicitsDefs : List (Name, CairoDef) -> List (Name, CairoDef)
+injectLinearImplicitsDefs : List (CairoName, CairoDef) -> List (CairoName, CairoDef)
 injectLinearImplicitsDefs defs = transformDefs (snd discoveryResult) (fst discoveryResult) defs
-    where discoveryResult : (SortedSet LinearImplicit, SortedMap Name (SortedSet LinearImplicit))
+    where discoveryResult : (SortedSet LinearImplicit, SortedMap CairoName (SortedSet LinearImplicit))
           discoveryResult = executeLinearImplicitDiscovery defs

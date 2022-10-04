@@ -15,8 +15,19 @@ async def test_view():
 
     contract = await starknet.deploy(
         source=CONTRACT_FILE,
-        constructor_calldata=[1,2]
+        cairo_path = ["../../../../skyro-runtime"],
+        constructor_calldata=[1,2,1,0]
     )
+
+    result = await starknet.state.invoke_raw(
+        contract_address=contract.contract_address,
+        selector=get_selector_from_name("viewEx"),
+        calldata=[1],
+        caller_address = 0,
+        max_fee = 0
+    )
+
+    assert result.call_info.retdata == [2]
 
     result = await starknet.state.invoke_raw(
         contract_address=contract.contract_address,

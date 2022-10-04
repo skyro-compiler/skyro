@@ -2,7 +2,7 @@ module CairoCode.CairoCodeSerializer
 
 import public CairoCode.CairoCode
 import Control.Monad.State
-import Core.Context
+import CairoCode.Name
 
 import Data.SortedMap
 import Data.SortedSet
@@ -15,7 +15,7 @@ import Protocol.Hex
 
 public export
 Program : Type
-Program = List (Name, CairoDef)
+Program = List (CairoName, CairoDef)
 
 %hide Data.String.unlines
 ||| This definition of unlines is necessary because the default Data.String.unlines
@@ -109,140 +109,6 @@ stringFromSafe = map pack . fromSafe . unpack
         -- Unknown escaping!
         fromSafe ('_' :: xs) = Nothing
         fromSafe (x   :: xs) = (x ::) <$> fromSafe xs
-
-||| A custom Name serializer is necessary because, while `cairoName` works perfectly
-||| fine for representation, it does not define an in-/bijective (reversible) mapping,
-||| which is necessary for the parser to accurately reconstruct the Name type.
-||| To ensure we use an alpha-numerical + underscore scheme, the scheme is as follows:
-||| * First two letters identify the top-level constructor.
-||| * The constituent elements of the constructor are separated by a single underscore
-||| * Strings are first made safe using the `stringToSafe` function
-||| * Strings are prefixed by an additional numeric element that represents their length.
-||| * Namespace serialization is treated like any other string after the fact (the dots get
-|||   replaced by "_dot" in `stringToSafe`).
-serializeName : Name -> String
-serializeName name = joinBy "_" $ go name
-  where stringRepr : String -> List String
-        stringRepr s = let s' = stringToSafe s
-                      in [ show $ strLength s', s' ]
-
-        go : Name -> List String
-
-        -- NS : Namespace -> Name -> Name
-        go (NS ns inner              ) = [ "NS" ] ++ stringRepr (show ns) ++ go inner
-
-        -- UN : UserName -> Name;   Basic      : String -> UserName
-        go (UN (Basic name')         ) = [ "UB" ] ++ stringRepr name'
-        -- UN : UserName -> Name;   Field      : String -> UserName
-        go (UN (Field name')         ) = [ "UF" ] ++ stringRepr name'
-        -- UN : UserName -> Name;   Underscore : UserName
-        go (UN Underscore            ) = [ "UU" ]
-
-        -- MN : String -> Int -> Name
-        go (MN name' idx             ) = [ "MN" ] ++ stringRepr name' ++ [ show idx ]
-        -- PV : Name -> Int -> Name
-        go (PV inner funIdx          ) = [ "PV" ] ++ go inner ++ [ show funIdx ]
-        -- DN : String -> Name -> Name
-        go (DN disp inner            ) = [ "DN" ] ++ stringRepr disp ++ go inner
-
-        -- Nested : (Int, Int) -> Name -> Name
-        go (Nested (start, end) inner) = [ "NE", show start, show end ] ++ go inner
-        -- CaseBlock : String -> Int -> Name
-        go (CaseBlock name' i        ) = [ "CA" ] ++ stringRepr name' ++ [ show i ]
-        -- WithBlock : String -> Int -> Name
-        go (WithBlock name' i        ) = [ "WI" ] ++ stringRepr name' ++ [ show i ]
-
-        -- Resolved : Int -> Name
-        go (Resolved n               ) = [ "FN", show n ]
-
-||| The deserializer for Name is placed here since it's not using the normal Parser facility.
-||| See `serializeName` above for the specification.
-||| Exported since the Name Parser Rule uses this.
-|||
-||| Internally uses a StateT _ Maybe _ monad-stack since it very succinctly represents the mental
-||| model of stepping through the String, sometimes multiple letters at a time, whilst possibly failing
-||| at any point.
-||| TODO Convince Kröni/Knecht to switch to a Skyro-specific representation of Names instead.
-export
-deserializeName : String -> Maybe Name
-deserializeName = uncurry check <=< (go.runStateT' . unpack)
-  where App : Type -> Type
-        App a = StateT (List Char) Maybe a
-
-        splitAt' : Nat -> App (List Char)
-        splitAt' n = do
-          xs <- get
-          guard (n <= List.length xs)
-          let (left, xs) = splitAt n xs
-          put xs
-          pure left
-
-        removeUnderscore : App ()
-        removeUnderscore = get >>= \xs => case xs of
-          -- Either we have a _ for the next field,
-          ('_' :: xs) => put xs
-          -- or we're the last field
-          [] => pure ()
-          -- Anything else is an error - we did not find a whole field
-          _ => empty
-
-        nextInt : App Nat
-        nextInt = do
-          number <- state (swap . span isDigit)
-          guard (List.length number > 0)
-
-          removeUnderscore
-
-          pure $ cast $ pack number
-
-        nextString : App String
-        nextString = do
-          len <- nextInt
-
-          text <- splitAt' len
-          safeText <- lift $ stringFromSafe $ pack text
-
-          removeUnderscore
-
-          pure safeText
-
-        nextTag : App String
-        nextTag = pack <$> splitAt' 2
-                      <*  removeUnderscore
-
-        check : List a -> Name -> Maybe Name
-        check [] = Just
-        check _  = const Nothing
-
-        go : App Name
-        go = do
-          tag <- nextTag
-
-          case tag of
-            "NS" => NS . mkNamespace <$> nextString
-                                    <*> assert_total go
-
-            "UB" => UN . Basic <$> nextString
-            "UF" => UN . Field <$> nextString
-            "UU" => pure $ UN Underscore
-
-            "MN" => MN <$> nextString      <*> (cast <$> nextInt)
-            "PV" => PV <$> assert_total go <*> (cast <$> nextInt)
-            "DN" => DN <$> nextString      <*> (assert_total go)
-
-            "NE" => do
-              start <- cast <$> nextInt
-              end   <- cast <$> nextInt
-              inner <- assert_total go
-              pure $ Nested (start, end) inner
-
-            "CA" => CaseBlock <$> nextString         <*> (cast <$> nextInt)
-            "WI" => WithBlock <$> nextString         <*> (cast <$> nextInt)
-
-            "FN" => Resolved <$> (cast <$> nextInt)
-
-            -- TODO Maybe report unknown value
-            _ => empty
 
 ||| Serialize the constants and constant types,
 ||| using a Rust-like postfix for identifying the literals.
@@ -393,17 +259,18 @@ mutual
 
           go (OP         res lins primfn args) = leftSide [res] ++ serializeOp lins args primfn
           go (CALL       res lins name   args) =
-            leftSide  res  ++          "\{serializeName name}\{showLinearArgs lins}(\{commaSpaceSep serializeReg args})"
+            leftSide  res  ++          "\{show name}\{showLinearArgs lins}(\{commaSpaceSep serializeReg args})"
           go (EXTPRIM    res lins name   args) =
-            leftSide  res  ++ "external \{serializeName name}\{showLinearArgs lins}(\{commaSpaceSep serializeReg args})"
+            leftSide  res  ++ "external \{show name}\{showLinearArgs lins}(\{commaSpaceSep serializeReg args})"
           go (STARKNETINTRINSIC res lins intr args) =
             leftSide [res]  ++ "intrinsic \{serializeIntrinsic intr}\{showLinearArgs lins}(\{commaSpaceSep serializeReg args})"
             where serializeIntrinsic : StarkNetIntrinsic -> String
-                  serializeIntrinsic (StorageVarAddr n) = "storage \{serializeName n}"
-                  serializeIntrinsic (EventSelector  n) = "event \{serializeName n}"
+                  serializeIntrinsic (StorageVarAddr n) = "storage \{show n}"
+                  serializeIntrinsic (EventSelector  n) = "event \{show n}"
+                  serializeIntrinsic (FunctionSelector  n) = "function \{show n}"
 
           go (MKCLOSURE  res name missing args) =
-            leftSide [res] ++ "closure \{serializeName name}(\{joinBy ", " params})"
+            leftSide [res] ++ "closure \{show name}(\{joinBy ", " params})"
             where args', missing', params : List String
                   args'    = map serializeReg args
                   missing' = replicate missing "_"
@@ -444,7 +311,7 @@ serializeRegs : List CairoReg -> String
 serializeRegs regs = commaSpaceSep serializeReg regs
 
 ||| Serialization of normal and external functions share almost everything.
-serializeCommonFun : Name -> (tags : Maybe (List String))
+serializeCommonFun : CairoName -> (tags : Maybe (List String))
                   -> (params : List CairoReg) -> (implicits : SortedMap LinearImplicit CairoReg)
                   -> (rets : List CairoReg) -> (body : List CairoInst) -> String
 serializeCommonFun name tags params implicits rets body = unlines (tagLines ++ [functionDefinition, bodyLines, "}"])
@@ -455,15 +322,15 @@ serializeCommonFun name tags params implicits rets body = unlines (tagLines ++ [
         funType : String
         funType = if tags == Nothing then "fun" else "extfun"
         functionDefinition : String
-        functionDefinition = "\{funType} \{serializeName name}\{serializeImplicitParams implicits}(\{serializeRegs params}) -> (\{serializeRegs rets}) {"
+        functionDefinition = "\{funType} \{show name}\{serializeImplicitParams implicits}(\{serializeRegs params}) -> (\{serializeRegs rets}) {"
         bodyLines : String
         bodyLines = serializeInstrs indentPerLevel body
 
 ||| Serialize a foreign function definition
-serializeForeignDef : Name -> (info : ForeignInfo) -> (args : Nat) -> (rets : Nat) -> String
+serializeForeignDef : CairoName -> (info : ForeignInfo) -> (args : Nat) -> (rets : Nat) -> String
 serializeForeignDef name (MkForeignInfo isApStable untupledSig implicits imports code) args rets =
   unlines
-    ( "foreign \{serializeName name}{\{commaSpaceSep implicitName implicits}}(\{show args}) -> (\{show rets}) \{stability} \{tupleSig} {"
+    ( "foreign \{show name}{\{commaSpaceSep implicitName implicits}}(\{show args}) -> (\{show rets}) \{stability} \{tupleSig} {"
     :: importLines
     ++ [ code'
       , "}"
@@ -477,7 +344,7 @@ serializeForeignDef name (MkForeignInfo isApStable untupledSig implicits imports
         code'       = (indent indentPerLevel "\"\"\"") ++ code ++ "\"\"\""
 
 ||| Serialize any top-level definition associated with the given name
-serializeDef : (Name, CairoDef) -> String
+serializeDef : (CairoName, CairoDef) -> String
 serializeDef (name, def) = case def of
   FunDef         params implicits rets instrs => serializeCommonFun name Nothing     params implicits rets instrs
   ExtFunDef tags params implicits rets instrs => serializeCommonFun name (Just tags) params implicits rets instrs

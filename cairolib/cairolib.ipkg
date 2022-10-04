@@ -19,7 +19,7 @@ modules =
     Starknet.Storage,
     Starknet.Events,
     Starknet.Syscall,
-    Starknet.ABI,
+    Starknet.Integration.ABI,
     Starknet,
     Common.Casts,
     Common.Dict,

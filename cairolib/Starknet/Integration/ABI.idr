@@ -1,65 +1,6 @@
-module Starknet.ABI
+module Starknet.Integration.ABI
 
 import public Language.Reflection
-
-{-
-  {
-    "type" : "Constructor",
-    "name" : "C1",
-    "inputs" : [
-      { 
-        "offset": 0,  -- required because JSON lists are unordered
-        "name": "arg1",
-        "type": "t1"
-      },
-      {
-        "offset": 1,
-        "name": "arg2",
-        "type": "t2"
-      }
-    ]
-  },
-  {
-    "type" : "L1Handler",
-    "name" : "L1",
-    "inputs" : []
-  },
-  {
-    "type" : "External",
-    "name" : "E1",
-    "inputs" : [],
-    "outputs" : []
-  },
-  {
-    "type" : "View",
-    "name" : "V1",
-    "inputs" : [],
-    "outputs" : []
-  },
-  {
-    "type" : "Type",
-    "name" : "S1",
-    "constructors": [
-       {
-         "name":"C1",
-         "tag":1,
-         "members": [
-           {
-             "name": "m1",
-             "type": "t1"
-           },
-           {
-             "name": "m2",
-             "type": "t2"
-           }
-         ]
-       }
-    ]
-  }
--}
-
-
-
 
 %language ElabReflection
 
@@ -86,9 +27,12 @@ record TypeDesc where
   tag: Int 
   constructors : List Constr
 
+-- Todo change name to something else
+-- is export neccesary
 public export
 record AbiEntry where
   constructor MkAbiEntry
+  abstract : Bool
   name : Name
   entryType : ABIEntryType
   inputs : List NamedElem
@@ -105,6 +49,10 @@ public export
 showName : (n:Name) -> String 
 showName (NS (MkNS ns) name) = separate "." (reverse ns) ++ "." ++ show name
 showName name = show name
+
+boolToJSON : Bool -> String
+boolToJSON True = "true"
+boolToJSON False = "false"
 
 mutual
     collectNameAndArgs : (tp: TTImp) -> (String, List String)
@@ -178,8 +126,8 @@ elemToJSON (MkNamedElem name tp) = #"{ "name":"\#{maybe "" showName name}", "typ
 
 %inline
 abiEntryToJSON : AbiEntry -> String
-abiEntryToJSON (MkAbiEntry fName entryTp inputs output) = 
-  #"{ "type":"\#{entryTypeToString entryTp}", "name":"\#{showName fName}", "inputs":[\#{separate "," (map elemToJSON inputs)}], "output":\#{elemToJSON output}}"#
+abiEntryToJSON (MkAbiEntry abstract fName entryTp inputs output) = 
+  #"{"abstract":\#{boolToJSON abstract}, "type":"\#{entryTypeToString entryTp}", "name":"\#{showName fName}", "inputs":[\#{separate "," (map elemToJSON inputs)}], "output":\#{elemToJSON output}}"#
   where entryTypeToString : ABIEntryType -> String
         entryTypeToString View = "View"
         entryTypeToString External = "External"
@@ -281,6 +229,8 @@ wrapperRetType _ t = do
                  failAt (getFC t) "ABI function returns must be in a View, External, ... context and type parameters and implicits are not supported"
 
 
+-- Assumes an implicit `m` at the start as in:
+-- {m:Type} -> External m => ... at the start
 wrapperType : Maybe Name -> (tp: TTImp) -> Elab TTImp
 wrapperType Nothing (IPi _ _ ImplicitArg name _ retType) = wrapperType name retType
 wrapperType (Just m1) t@(IPi _ _ AutoImplicit _ (IApp _ (IVar _ constraintName) (IVar _ m2)) retType) = if show m1 == show m2
@@ -308,22 +258,24 @@ wrapperFunctionName : (n: Name) -> Elab Name
 wrapperFunctionName (NS _ (UN (Basic n))) = pure $ NS (MkNS ["Wrapper","ABI","Main"]) (UN $ Basic n)
 wrapperFunctionName other = assert_total $ idris_crash ("Bad name: " ++ show other)
 
-%spec n
-wrapperTypeName : (n: Name) -> Elab Name
-wrapperTypeName (NS _ (UN (Basic n))) = pure $ NS (MkNS ["Main"]) (UN $ Basic (n ++ "'"))
-wrapperTypeName other = assert_total $ idris_crash ("Bad name: " ++ show other)
+-- Helper for name Resolution
+-- Todo: if it has "." in it use as fully qualified
+resolveName : String -> Elab Name
+resolveName name = inCurrentNS (UN $ Basic name)
 
 -- Takes a function name and type and creates a wrapper
 -- viewEx : View m => Felt -> Felt -> m Felt
 --
--- %nomangle "cairo:writeEx'|External|addr:Common.Felt.Felt->value:Common.Felt.Felt->Common.Cairo Builtin.Unit"
+-- %nomangle "cairo:viewEx'|External|addr:Common.Felt.Felt->value:Common.Felt.Felt->Common.Cairo Builtin.Unit"
 -- viewEx' : Felt -> Felt -> Cairo Felt
 -- Returns the name and type of the wrapper function
 public export
 processFunction : String -> Elab AbiEntry
 processFunction fName = do
-  [(fnName, tp)] <- getType (UN $ Basic fName)
-    | _ => failAt EmptyFC ("Unknown or ambiguous function in entry point: " ++ fName)
+  name <- resolveName fName
+  [(fnName, tp)] <- getType name
+    | [] => failAt EmptyFC ("Unknown function in entry point: " ++ fName)
+    | _ => failAt EmptyFC ("Ambiguous function in entry point: " ++ fName)
 
   (Just entryTp) <- pure $ findAbiEntryType tp
     | _ => do logTerm "Unknown ABI type!" 0 "" tp
@@ -332,7 +284,7 @@ processFunction fName = do
   wName <- wrapperFunctionName fnName
   wType <- wrapperType Nothing tp
   (inputs, output) <- abiFnType wType
-  let abiEntry = MkAbiEntry wName entryTp inputs output
+  let abiEntry = MkAbiEntry False wName entryTp inputs output
 
   declare [
     IClaim EmptyFC MW Export [NoMangle (Just $ BackendNames [("cairo",abiEntryToJSON abiEntry)])] (MkTy EmptyFC EmptyFC wName wType),
@@ -361,7 +313,17 @@ typeDesc tpName = do
     | _ => failAt EmptyFC ((show tpName) ++ " is not a type constructor")
   consNames <- getCons tpName
   pure $ MkTypeDesc tpName tag !(traverse consDesc consNames)
-  
+
+
+-- Relocates the given name into the current namespace and appends a '
+-- Type declarations are located in the current namespace to ensure,
+-- that there are no collisions between type declarations which are
+-- generated by `abi` with those which are generated by `contract_interface`
+%spec n
+typeDeclName : (n: Name) -> Elab Name
+typeDeclName (NS _ (UN (Basic n))) = inCurrentNS (UN $ Basic (n ++ "'"))
+typeDeclName other = assert_total $ idris_crash ("Bad name: " ++ show other)
+
 -- Generates a declaration for the given type name
 -- Input: Main.RecType
 --
@@ -373,8 +335,8 @@ declareType : Name -> Elab (Maybe Name)
 declareType tpName = do
   tpDesc@(MkTypeDesc _ _ (_::_)) <- typeDesc tpName 
     | _ => pure Nothing -- Ignore types without constructors
-  descName <- wrapperTypeName tpName
-  declare [ IClaim EmptyFC MW Private [NoMangle (Just (BackendNames [("cairo",typeDescToJSON tpDesc)]))] (MkTy EmptyFC EmptyFC descName (IVar EmptyFC (UN (Basic "Unit")))),
+  descName <- typeDeclName tpName
+  declare [ IClaim EmptyFC MW Public [NoMangle (Just (BackendNames [("cairo",typeDescToJSON tpDesc)]))] (MkTy EmptyFC EmptyFC descName (IVar EmptyFC (UN (Basic "Unit")))),
             IDef EmptyFC descName [PatClause EmptyFC (IVar EmptyFC descName) (IVar EmptyFC (UN (Basic "MkUnit")))]]
   pure $ Just descName
 
@@ -398,9 +360,10 @@ namespace StorageVar -- (mit Dollar in Name)
 -}
 processStorageVar : String -> Elab Name
 processStorageVar sv = do
-  name <- inCurrentNS (UN $ Basic sv)
+  name <- resolveName sv
   [(svName, tp)] <- getType name
-                 | _ => failAt EmptyFC ("Unknown or ambiguous storage var in entry point: " ++ sv)
+                 | [] => failAt EmptyFC ("Unknown storage var in entry point: " ++ sv)
+                 | _ => failAt EmptyFC ("Ambiguous storage var in entry point: " ++ sv)
   externName <- inCurrentNS (UN $ Basic (sv ++ "_addr")) 
   -- This needs to end in "_addr" because because calls to externals ending in "_addr" are replaced by 
   -- STARKNET_INTRINSIC (StorageVar name)
@@ -410,9 +373,11 @@ processStorageVar sv = do
   declare [ IClaim EmptyFC MW Public [NoInline, NoMangle (Just (BackendNames [("cairo",#"{ "type":"StorageVar", "name":"\#{sv}"}"#)])), ExternFn] (MkTy EmptyFC EmptyFC externName (IVar EmptyFC (UN (Basic "Felt")))) ]
   
   --declare `[balance = MkStorageSpace balance_addr ]
-  declare [IDef EmptyFC svName [PatClause EmptyFC (IVar EmptyFC svName) `(MkStorageSpace ~(IVar EmptyFC externName))]]
-  pure externName
+  --declare [IDef EmptyFC svName [PatClause EmptyFC (IVar EmptyFC svName) `(MkStorageSpace ~(IVar EmptyFC externName))]]
 
+  --declare `[balance = fromStorageAddr balance_addr ]
+  declare [IDef EmptyFC svName [PatClause EmptyFC (IVar EmptyFC svName) `(fromStorageAddr ~(IVar EmptyFC externName))]]
+  pure externName
 
 {-
 myEvent : EventDesc [Felt] [Felt, Felt]
@@ -424,12 +389,18 @@ myEvent_event
 -}
 processEvent : String -> Elab Name
 processEvent ev = do 
-  name <- inCurrentNS (UN $ Basic ev)
+  name <- resolveName ev
   [(evName, tp)] <- getType name
-                 | _ => failAt EmptyFC ("Unknown or ambiguous event in entry point: " ++ ev)
+                 | [] => failAt EmptyFC ("Unknown event in entry point: " ++ ev)
+                 | _ => failAt EmptyFC ("Ambiguous event in entry point: " ++ ev)
   externName <- inCurrentNS (UN $ Basic (ev ++ "_event"))
   declare [IClaim EmptyFC MW Public [NoInline, NoMangle (Just (BackendNames [("cairo",#"{ "type":"Event", "name":"\#{ev}"}"#)])), ExternFn] (MkTy EmptyFC EmptyFC externName (IVar EmptyFC (UN (Basic "Felt")))) ]
-  declare [IDef EmptyFC evName [PatClause EmptyFC (IVar EmptyFC evName) `(MkEventDesc (singletonSegment ~(IVar EmptyFC externName)) emptySegment)]]
+
+  -- declare `[myEvent = MkEventDesc (singletonSegment myEvent_event) emptySegment ]
+  -- declare [IDef EmptyFC evName [PatClause EmptyFC (IVar EmptyFC evName) `(MkEventDesc (singletonSegment ~(IVar EmptyFC externName)) emptySegment)]]
+
+  -- declare `[myEvent = fromEventId myEvent_event) ]
+  declare [IDef EmptyFC evName [PatClause EmptyFC (IVar EmptyFC evName) `(fromEventId ~(IVar EmptyFC externName))]]
   pure externName
 
 -- Declares wrapper functions and generates the ABI description string.
@@ -447,3 +418,73 @@ abi {functions} {storageVars} {events} = do
   let wrapperNamesString = map showName (wrapperNames ++ svarNames ++ eventNames)
   pure (separate ";" wrapperNamesString)
 
+
+
+
+-- in: a -> b -> Cairo c
+-- out: a -> b -> Segment
+decoderType : TTImp -> Elab TTImp
+decoderType (IPi fc cnt ExplicitArg name argTp rest) = (decoderType rest)
+decoderType (IApp _ c target) = 
+  pure $ IPi EmptyFC MW ExplicitArg Nothing (IVar EmptyFC (UN (Basic "Segment"))) target
+decoderType tp = do 
+  logTerm "Unable to create encoder type!" 0 "" tp
+  failAt EmptyFC "Unable to create encoder type!"
+
+
+-- in: a -> b -> Cairo c
+-- out: a -> b -> Segment
+encoderType : TTImp -> Elab TTImp
+encoderType (IPi fc cnt ExplicitArg name argTp rest) = pure $ IPi fc cnt ExplicitArg name argTp !(encoderType rest)
+encoderType (IApp _ _ _) = pure $ IVar EmptyFC (UN (Basic "Segment"))
+encoderType tp = do 
+  logTerm "Unable to create encoder type!" 0 "" tp
+  failAt EmptyFC "Unable to create encoder type!"
+
+
+{-
+%extern %nomangle {abstract function param types, result type (used for encoder generation)}
+fn_selector : Felt
+fn_param_decoder : T1 -> T2 -> Segement
+fn_result_decoder : Segment -> T
+-}
+-- Namespace: (NS (MkNS ([ns])) (UN (Basic (name ++ "_selector"))))
+contractFunction : String -> Elab AbiEntry
+contractFunction fName = do
+  name <- resolveName fName
+  [(fnName, tp)] <- getType name
+    | [] => failAt EmptyFC ("Unknown function in entry point: " ++ fName)
+    | _ => failAt EmptyFC ("Ambiguous function in entry point: " ++ fName)
+
+  (Just entryTp) <- pure $ findAbiEntryType tp
+    | _ => do logTerm "Unknown ABI type!" 0 "" tp
+              failAt EmptyFC "Unknown ABI type! Use one of: View, External, Constructor, L1Handler"
+
+              failAt EmptyFC "Unknown ABI type! Use one of: View, External"
+  wType <- wrapperType Nothing tp
+  (inputs, output) <- abiFnType wType
+
+  selectorName <- inCurrentNS (UN $ Basic (fName ++ "_selector")) 
+  let abiEntry = MkAbiEntry True selectorName entryTp inputs output
+
+  baseName <- inCurrentNS (UN $ Basic fName)
+  let abstEntry = MkAbiEntry True baseName entryTp inputs output
+  declare [ IClaim EmptyFC MW Public [NoInline, NoMangle (Just $ BackendNames [("cairo",abiEntryToJSON abstEntry)]), ExternFn] (MkTy EmptyFC EmptyFC selectorName (IVar EmptyFC (UN (Basic "Felt")))) ]
+
+  encoderName <- inCurrentNS (UN $ Basic (fName ++ "_encodeParams")) 
+  encType <- encoderType wType
+  declare [ IClaim EmptyFC MW Public [NoInline,  ExternFn] (MkTy EmptyFC EmptyFC encoderName encType) ]
+
+  --todo: compute correct type: Segment -> Tr
+  decoderName <- inCurrentNS (UN $ Basic (fName ++ "_decodeResult")) 
+  decType <- decoderType wType
+  declare [ IClaim EmptyFC MW Public [NoInline, ExternFn] (MkTy EmptyFC EmptyFC decoderName decType) ]
+
+  pure abiEntry
+
+
+public export
+contract_interface : List String -> Elab ()
+contract_interface functionNames = do
+  entries <- traverse contractFunction functionNames
+  ignore $ declareTypes entries

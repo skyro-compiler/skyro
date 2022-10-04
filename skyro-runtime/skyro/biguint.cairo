@@ -8,7 +8,6 @@ from starkware.cairo.common.math_cmp import is_nn
 const BIT_LENGTH = 125
 const SHIFT = 2 ** 125
 const EON = -1
-# const NEG = -2
 
 # Represents an unbounded unsigned integer (a natural number) as a pointer to the integer in memory (for Skyro compatibility the type is felt not felt*),
 # represented base SHIFT as an EON-terminated list of felts in [0,SHIFT) with least significant digit first.
@@ -409,7 +408,7 @@ func to_felt(a : felt) -> (res : felt):
     if [a] == EON:
         return (0)
     else:
-        let (rec) = to_felt(a+1)
-        return ((rec*SHIFT)+[a])
+        let (res) = to_felt(a+1)
+        return ((res*SHIFT)+[a])
     end
 end

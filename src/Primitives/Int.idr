@@ -2,7 +2,8 @@
 module Primitives.Int
 
 import Primitives.Common
-import Core.Context
+-- import Core.Context
+import CairoCode.Name
 import CairoCode.CairoCode
 import Data.SortedSet
 import Data.SortedMap
@@ -12,7 +13,7 @@ import CodeGen.CodeGenHelper
 ---------------------------------------------------------------------------------------------------
 -- UINT General
 ---------------------------------------------------------------------------------------------------
-intX_name : String-> Nat -> Name
+intX_name : String-> Nat -> CairoName
 intX_name op nBits = makeBuiltinName "\{op}_int\{show nBits}"
 
 intX_import : String -> Nat -> Import
@@ -21,7 +22,7 @@ intX_import op nBits = MkImport "skyro.int\{show nBits}" "int_\{op}" (Just "\{op
 ---------------------------------------------------------------------------------------------------
 -- UINT ADD
 ---------------------------------------------------------------------------------------------------
-add_intX_name : Nat -> Name
+add_intX_name : Nat -> CairoName
 add_intX_name = intX_name "add"
 
 add_intX_import : Nat -> Import
@@ -87,7 +88,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT SUB
 ---------------------------------------------------------------------------------------------------
-sub_intX_name : Nat -> Name
+sub_intX_name : Nat -> CairoName
 sub_intX_name = intX_name "sub"
 
 sub_intX_import : Nat -> Import
@@ -147,7 +148,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT MUL
 ---------------------------------------------------------------------------------------------------
-mul_intX_name : Nat -> Name
+mul_intX_name : Nat -> CairoName
 mul_intX_name = intX_name "mul"
 
 mul_intX_import : Nat -> Import
@@ -221,7 +222,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT DIV
 ---------------------------------------------------------------------------------------------------
-div_intX_name : Nat -> Name
+div_intX_name : Nat -> CairoName
 div_intX_name = intX_name "div"
 
 div_intX_import : Nat -> Import
@@ -285,7 +286,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT MOD
 ---------------------------------------------------------------------------------------------------
-mod_intX_name : Nat -> Name
+mod_intX_name : Nat -> CairoName
 mod_intX_name = intX_name "mod"
 
 mod_intX_import : Nat -> Import
@@ -349,7 +350,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- INT NEG:
 ---------------------------------------------------------------------------------------------------
-neg_intX_name : Nat -> Name
+neg_intX_name : Nat -> CairoName
 neg_intX_name = intX_name "neg"
 
 neg_intX_import : Nat -> Import
@@ -398,7 +399,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- INT SHL:
 ---------------------------------------------------------------------------------------------------
-shl_intX_name : Nat -> Name
+shl_intX_name : Nat -> CairoName
 shl_intX_name = intX_name "shl"
 
 shl_intX_import : Nat -> Import
@@ -468,7 +469,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- INT SHR:
 ---------------------------------------------------------------------------------------------------
-shr_intX_name : Nat -> Name
+shr_intX_name : Nat -> CairoName
 shr_intX_name = intX_name "shr"
 
 shr_intX_import : Nat -> Import
@@ -537,7 +538,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- INT AND:
 ---------------------------------------------------------------------------------------------------
-and_intX_name : Nat -> Name
+and_intX_name : Nat -> CairoName
 and_intX_name = intX_name "and"
 
 and_intX_import : Nat -> Import
@@ -611,7 +612,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- INT OR:
 ---------------------------------------------------------------------------------------------------
-or_intX_name : Nat -> Name
+or_intX_name : Nat -> CairoName
 or_intX_name = intX_name "or"
 
 or_intX_import : Nat -> Import
@@ -685,7 +686,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- INT XOR:
 ---------------------------------------------------------------------------------------------------
-xor_intX_name : Nat -> Name
+xor_intX_name : Nat -> CairoName
 xor_intX_name = intX_name "xor"
 
 xor_intX_import : Nat -> Import
@@ -749,7 +750,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- INT LT
 ---------------------------------------------------------------------------------------------------
-lt_intX_name : Name
+lt_intX_name : CairoName
 lt_intX_name = makeBuiltinName "lt_int"
 
 lt_intX_import : Import
@@ -803,7 +804,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- INT LTE
 ---------------------------------------------------------------------------------------------------
-lte_intX_name : Name
+lte_intX_name : CairoName
 lte_intX_name = makeBuiltinName "lte_int"
 
 lte_intX_import : Import
@@ -995,7 +996,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- INT CASTS
 ---------------------------------------------------------------------------------------------------
-cast_intX_name : Nat -> Name
+cast_intX_name : Nat -> CairoName
 cast_intX_name = intX_name "cast"
 
 cast_intX_import : Nat -> Import

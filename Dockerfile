@@ -5,11 +5,19 @@ RUN apt update
 RUN apt install -y cmake g++ python3.7 python3.7-dev python3.7-venv python3-pip libgmp3-dev wget unzip git chezscheme
 RUN python3.7 -m pip install pytest
 RUN python3.7 -m pip install Cython
+
 # Install Cairo
-RUN wget https://github.com/starkware-libs/cairo-lang/releases/download/v0.9.0/cairo-lang-0.9.0.zip
+
 RUN python3.7 -m pip install contextvars
-RUN unzip cairo-lang-0.9.0.zip
-RUN python3.7 -m pip install cairo-lang-0.9.0.zip
+RUN python3.7 -m pip install multidict
+RUN python3.7 -m pip install yarl
+RUN python3.7 -m pip install async_timeout
+RUN python3.7 -m pip install charset_normalizer
+RUN python3.7 -m pip install aiosignal
+
+RUN wget https://github.com/starkware-libs/cairo-lang/releases/download/v0.9.1/cairo-lang-0.9.1.zip
+RUN unzip cairo-lang-0.9.1.zip
+RUN python3.7 -m pip install cairo-lang-0.9.1.zip
 
 # Build the Idris2 compiler
 # https://github.com/idris-lang/Idris2/blob/main/INSTALL.md

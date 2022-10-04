@@ -2,8 +2,10 @@ module CairoCode.Traversal.ValueTracker
 
 import Data.SortedSet
 import Data.SortedMap
+import Data.Maybe
+import Data.List
 import CairoCode.CairoCode
-import Core.Context
+-- import Core.Context
 import CairoCode.Traversal.Base
 import CairoCode.Traversal.Composition
 import CairoCode.Traversal.Defaults
@@ -156,7 +158,7 @@ getDistance reg = do
 
 export
 extractDepth : (ScopedBindings a) -> Int
-extractDepth bindings = div (cast $  length bindings) 2
+extractDepth bindings = div (cast $ length bindings) 2
 
 export
 getDepth : Traversal (ScopedBindings a) Int
@@ -178,16 +180,23 @@ descendBranch = updateState update
           update old@((CaseScope _ _)::(BlockScope binds)::xs) = (BlockScope binds)::old
           update _ = assert_total $ idris_crash "Wrong stack structure for branch descending"
 
-ascendBranch : Semigroup a => Traversal (ScopedBindings a) ()
+public export
+interface Semigroup a => BranchAware a where
+    leaveScope : Int -> a -> a
+    leaveScope _ v = v
+
+ascendBranch : BranchAware a => Traversal (ScopedBindings a) ()
 ascendBranch = updateState update
     where update : ScopedBindings a -> ScopedBindings a
           update (((BlockScope blockBinds)::(CaseScope cv caseBinds)::xs)) = (CaseScope cv (blockBinds <+> caseBinds))::xs
           update _ = assert_total $ idris_crash "Wrong stack structure for branch ascending"
 
-ascendCase : Traversal (ScopedBindings a) ()
+ascendCase : BranchAware a => Traversal (ScopedBindings a) ()
 ascendCase = updateState update
     where update : ScopedBindings a -> ScopedBindings a
-          update (((CaseScope cv caseBinds)::(BlockScope _)::xs)) = (BlockScope caseBinds)::xs
+          update (((CaseScope cv caseBinds)::(BlockScope _)::xs)) = (BlockScope $ liftBindings caseBinds)::xs
+                where liftBindings : SortedMap CairoReg a -> SortedMap CairoReg a
+                      liftBindings = mapValueMap (leaveScope (div (cast $ length xs) 2))
           update _ = assert_total $ idris_crash "Wrong stack structure for case ascending"
 
 {-
@@ -202,7 +211,7 @@ ascendCase = updateState update
                                                                      | - state -> end
 -}
 export
-valueTracker : Semigroup a => Lens os (ScopedBindings a) -> (CairoReg -> a) -> (CairoReg -> a -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a)) -> (InstVisit CairoReg -> Traversal os ())
+valueTracker : BranchAware a => Lens os (ScopedBindings a) -> (CairoReg -> a) -> (CairoReg -> a -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a)) -> (InstVisit CairoReg -> Traversal os ())
 valueTracker lens defaultCase prepareBinding tracker = seqTraversal handleCase (substituteInstVisitValue substitute doTracking)
     where lift : Traversal (ScopedBindings a) b -> Traversal os b
           lift = composeState lens 
@@ -268,7 +277,7 @@ initialTrackerState = Nil
                         | - value (a) & state -> collector - value (b) & state -> end
 -}
 export
-valueCollector : Semigroup a => Lens os (ScopedBindings a) -> (CairoReg -> a) -> (CairoReg -> a -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a))  -> (InstVisit a -> Traversal os b) -> (InstVisit CairoReg -> Traversal os b)
+valueCollector : BranchAware a => Lens os (ScopedBindings a) -> (CairoReg -> a) -> (CairoReg -> a -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a))  -> (InstVisit a -> Traversal os b) -> (InstVisit CairoReg -> Traversal os b)
 valueCollector lens defaultCase prepareBinding tracker collector = seqTraversal (valueTracker lens defaultCase prepareBinding tracker) (substituteInstVisitValue substitute collector)
     where substitute : CairoReg -> Traversal os a
           substitute r@(Eliminated _) = map (prepareBinding r) (tracker (VisitNull r))
@@ -281,7 +290,7 @@ valueCollector lens defaultCase prepareBinding tracker collector = seqTraversal 
                                                                                        | - [value (Reg)] ------> end <------ state ------------ |
 -}
 export
-valueTransformer : Semigroup a => Lens os (ScopedBindings a) -> (CairoReg -> a) -> (CairoReg -> a -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a)) -> (InstVisit a -> Traversal os (List (InstVisit CairoReg))) -> (InstVisit CairoReg -> Traversal os (List (InstVisit CairoReg)))
+valueTransformer : BranchAware a => Lens os (ScopedBindings a) -> (CairoReg -> a) -> (CairoReg -> a -> a) -> ((v:InstVisit a) -> Traversal os (ValBindType v a)) -> (InstVisit a -> Traversal os (List (InstVisit CairoReg))) -> (InstVisit CairoReg -> Traversal os (List (InstVisit CairoReg)))
 valueTransformer lens defaultCase prepareBinding tracker transformer = traverseTransform (substituteInstVisitValue substitute transformer) plainTracker
     where substitute : CairoReg -> Traversal os a
           substitute r@(Eliminated _) = map (prepareBinding r) (tracker (VisitNull r))

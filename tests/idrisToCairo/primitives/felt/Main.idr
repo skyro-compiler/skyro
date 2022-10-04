@@ -10,7 +10,7 @@ import Data.Bits
 %foreign 
   """
   code:
-  func Main_f_200() -> (r):
+  func $name$() -> (r):
       return (200)
   end
   """
@@ -19,7 +19,7 @@ f_200 : Felt
 %foreign 
   """
   code:
-  func Main_f_100() -> (r):
+  func $name$() -> (r):
       return (100)
   end
   """

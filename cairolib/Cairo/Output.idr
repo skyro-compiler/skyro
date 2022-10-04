@@ -7,12 +7,12 @@ public export
     "apStable:True"
     """
     code:
-    func Cairo_Output_cairooutput(value, output_ptr) -> (output_ptr):
+    func $name$(value, output_ptr) -> (output_ptr):
         assert [output_ptr] = value
         return (output_ptr + 1)
     end
     """
-cairooutput :  Felt -> PrimCairoUnit
+cairooutput : Felt -> PrimCairoUnit
 
 -- Outputs the given value (and keeps track ouf the output_ptr)
 public export %inline

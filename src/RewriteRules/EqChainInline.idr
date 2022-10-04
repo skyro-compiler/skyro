@@ -4,8 +4,9 @@ import Data.SortedMap
 import Data.SortedSet
 import CairoCode.CairoCode
 import CairoCode.CairoCodeUtils
-import Core.Context
+import CairoCode.Name
 import Data.List
+import Data.Maybe
 import CommonDef
 import Primitives.Primitives
 
@@ -131,11 +132,11 @@ mutual
     processInsts state insts = snd $ foldl (\(s,acc),i => let (ni,ns) = inlineOrEqChain i s in (ns, acc ++ [ni])) (state, []) insts
 
 
-eqChainInlineDef : (Name, CairoDef) -> (Name, CairoDef)
+eqChainInlineDef : (CairoName, CairoDef) -> (CairoName, CairoDef)
 eqChainInlineDef (name, FunDef params implicits rets body) = (name, FunDef params implicits rets (processInsts empty body))
 eqChainInlineDef (name, ExtFunDef tags params implicits rets body) = (name, ExtFunDef tags params implicits rets (processInsts empty body))
 eqChainInlineDef def = def
 
 export
-eqChainInline : List (Name, CairoDef) -> List (Name, CairoDef)
+eqChainInline : List (CairoName, CairoDef) -> List (CairoName, CairoDef)
 eqChainInline defs = map eqChainInlineDef defs

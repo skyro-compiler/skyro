@@ -100,3 +100,9 @@ traverse f xs = traverse' xs []
     traverse' : List a -> List b -> Cairo (List b)
     traverse' [] acc = pure (reverse acc)
     traverse' (x :: xs) acc = traverse' xs (!(f x) :: acc)
+
+-- Traversable specialised for performance.
+public export -- %spec f
+traverse_ : (f: (a -> Cairo ())) -> (la: List a) -> Cairo ()
+traverse_ f []        = pure ()
+traverse_ f (x :: xs) = f x >> traverse_ f xs

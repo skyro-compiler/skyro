@@ -18,6 +18,7 @@ data Keyword =
   | None
   | From
   | Import
+  | As
   | Stable
   | Unstable
   | Underscore
@@ -58,6 +59,7 @@ Eq Keyword where
   None       == None       = True
   From       == From       = True
   Import     == Import     = True
+  As         == As         = True
   Stable     == Stable     = True
   Unstable   == Unstable   = True
   Underscore == Underscore = True
@@ -100,6 +102,7 @@ Show Keyword where
   show None       = "<none>"
   show From       = "from"
   show Import     = "import"
+  show As         = "as"
   show Stable     = "stable"
   show Unstable   = "unstable"
   show Underscore = "_"
@@ -169,6 +172,7 @@ data SkyroToken =
   | GreaterThanEqual
   -- Variants
   | Name String
+  | Dollar
   | TripleQuoted String
   | SingleQuoted String
   | Character String -- TODO Unescaped Character
@@ -213,6 +217,7 @@ Eq SkyroToken where
   GreaterThanEqual     == GreaterThanEqual     = True
 
   (Name name1)         == (Name name2)         = name1 == name2
+  Dollar               == Dollar               = True
   (TripleQuoted text1) == (TripleQuoted text2) = text1 == text2
   (SingleQuoted text1) == (SingleQuoted text2) = text1 == text2
   (Character  ch1)     == (Character ch2)      = ch1 == ch2
@@ -256,6 +261,7 @@ Show SkyroToken where
   show GreaterThanEqual    = ">"
 
   show (Name name)         = name
+  show Dollar              = "$"
   show (TripleQuoted text) = "\"\"\"" ++ text ++ "\"\"\""
   show (SingleQuoted text) = "\"" ++ text ++ "\""
   show (Character ch)      = show ch
@@ -273,6 +279,7 @@ TokenList = List (WithBounds SkyroToken)
 wordBoundary : Recognise False
 wordBoundary = reject (alphaNum <|> is '_')
 
+||| TODO: Can a CairoName possibly start with one of the normal keywords, e.g. 'extfun'?
 keywordLexer : TokenMap SkyroToken
 keywordLexer =
   let kwLex : String -> Keyword -> (Recognise True, String -> SkyroToken)
@@ -411,6 +418,7 @@ skyroTokens =
     , (is '>',                                const GreaterThanEqual)
 
     , (alpha <+> many (alphaNums <|> is '_'), Name)
+    , (is '$',                                const Dollar) -- Used in Name Expressions as the iter-separator
     , (quote (exact "\"\"\"") any,            TripleQuoted . shrink 3)
     , (quote (is '"') any,                    SingleQuoted . shrink 1)
     , (charLit,                               Character . shrink 1)

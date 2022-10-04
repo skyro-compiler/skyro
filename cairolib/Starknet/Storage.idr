@@ -18,7 +18,7 @@ export
     "linear_implicits:range_check_ptr"
     """
     code:
-    func Starknet_Storage_normalizeAddress(range_check_ptr,address) -> (result, range_check_ptr):
+    func $name$(range_check_ptr,address) -> (result, range_check_ptr):
         let (res) = normalize_address{range_check_ptr = range_check_ptr}(address)
         return (res, range_check_ptr)
     end
@@ -31,7 +31,7 @@ export
     "linear_implicits:pedersen_ptr"
     """
     code:
-    func Starknet_Storage_computeAddress(pedersen_ptr,address, seg) -> (result, pedersen_ptr):
+    func $name$(pedersen_ptr,address, seg) -> (result, pedersen_ptr):
         let len = [seg]
         let ptr = [seg+1]
         if len == 0:
@@ -39,7 +39,7 @@ export
         else:
           assert [pedersen_ptr] = address
           assert [pedersen_ptr + 1] = [ptr]
-          return Starknet_Storage_computeAddress(pedersen_ptr + 3, [pedersen_ptr + 2], cast(new (len-1, ptr+1),felt) )
+          return $name$(pedersen_ptr + 3, [pedersen_ptr + 2], cast(new (len-1, ptr+1),felt) )
         end
     end
     """
@@ -51,7 +51,7 @@ computeAddress : (address: Felt) -> (seg: Segment) -> (Felt)
     "untupled:(_,_)"
     """
     code:
-    func Starknet_Storage_storageReadPrimHelper(address, len, result, syscall_ptr) -> (syscall_ptr):
+    func $name$Helper(address, len, result, syscall_ptr) -> (syscall_ptr):
         if len == 0:
             return (syscall_ptr)
         end
@@ -59,24 +59,24 @@ computeAddress : (address: Felt) -> (seg: Segment) -> (Felt)
         let syscall_ptr_ = cast(syscall_ptr, felt*)
         let (res) = storage_read{syscall_ptr=syscall_ptr_}(address)
         assert [result] = res
-        return Starknet_Storage_storageReadPrimHelper(
+        return $name$Helper(
             address + 1, len - 1,  cast(result + 1, felt), cast(syscall_ptr_, felt)
         )
     end
 
-    func Starknet_Storage_storageReadPrim(hasStaticSize, address, len, syscall_ptr) -> (
+    func $name$(hasStaticSize, address, len, syscall_ptr) -> (
         syscall_ptr, result
     ):  
         alloc_locals
         let (result_ptr) = alloc()
         local result = cast(result_ptr, felt)
         if hasStaticSize == 1:
-            let (syscall_ptr) = Starknet_Storage_storageReadPrimHelper(address, len, result, syscall_ptr)
+            let (syscall_ptr) = $name$Helper(address, len, result, syscall_ptr)
             return (syscall_ptr, cast(new (len, result), felt))
         else:
             let syscall_ptr_ = cast(syscall_ptr, felt*)
             let (len) = storage_read{syscall_ptr=syscall_ptr_}(address)
-            let (syscall_ptr) = Starknet_Storage_storageReadPrimHelper(address + 1, len, result, syscall_ptr)
+            let (syscall_ptr) = $name$Helper(address + 1, len, result, syscall_ptr)
             return (syscall_ptr, cast(new (len, result), felt))
         end
     end
@@ -87,37 +87,38 @@ public export %inline
 rawStorageRead : (hasStaticSize: Bool) -> (address: Felt) ->  (len: Felt) -> Cairo Segment
 rawStorageRead hasStaticSize address len = fromPrimCairo (storageReadPrim hasStaticSize address len)
 
+-- Todo: Split into safe and unsafe version
+--       However, can we even implement this safely, if we have corrupted size in storage then all bets are off
+
 public export %inline 
 readStorageHelper : (c: Codable e) => (addr: StorageAddress) -> Cairo e
 readStorageHelper (MkStorageAddr address) = case size @{c} of
-    Just nrElems => map (fst . decode) $ rawStorageRead True address (cast nrElems)
-    Nothing      => map (fst . decode) $ rawStorageRead False address 0
- 
-
+    Just nrElems => map (fst . unsafeDecode) $ rawStorageRead True address (cast nrElems)
+    Nothing      => map (fst . unsafeDecode) $ rawStorageRead False address 0
 
 %foreign 
     "imports:starkware.starknet.common.syscalls storage_write"
     """
     code:
-    func Starknet_Storage_storageWritePrimHelper(address, len, ptr, syscall_ptr) -> (syscall_ptr):
+    func $name$Helper(address, len, ptr, syscall_ptr) -> (syscall_ptr):
         if len == 0:
             return (syscall_ptr)
         end
 
         let syscall_ptr_ = cast(syscall_ptr, felt*)
         storage_write{syscall_ptr = syscall_ptr_}(address,[ptr])
-        return Starknet_Storage_storageWritePrimHelper(address + 1, len-1, ptr + 1, cast(syscall_ptr_, felt))
+        return $name$Helper(address + 1, len-1, ptr + 1, cast(syscall_ptr_, felt))
     end
 
 
-    func Starknet_Storage_storageWritePrim(hasStaticSize, address, seg, syscall_ptr) -> (syscall_ptr):
+    func $name$(hasStaticSize, address, seg, syscall_ptr) -> (syscall_ptr):
         if hasStaticSize == 1:
-            let (syscall_ptr) = Starknet_Storage_storageWritePrimHelper(address, [seg], [seg+1], syscall_ptr)
+            let (syscall_ptr) = $name$Helper(address, [seg], [seg+1], syscall_ptr)
         else:
             let syscall_ptr_ = cast(syscall_ptr, felt*)
             storage_write{syscall_ptr = syscall_ptr_}(address,[seg])
             let syscall_ptr = cast(syscall_ptr_, felt)
-            let (syscall_ptr) = Starknet_Storage_storageWritePrimHelper(address+1, [seg], [seg+1], syscall_ptr)
+            let (syscall_ptr) = $name$Helper(address+1, [seg], [seg+1], syscall_ptr)
         end
         return (syscall_ptr)
     end
@@ -130,13 +131,20 @@ rawStorageWrite hasStaticSize address seg = fromPrimCairoUnit (storageWritePrim 
 
 public export %inline 
 writeStorageHelper : (c: Codable e) => (addr: StorageAddress) -> (value: e) -> Cairo Unit
-writeStorageHelper {c} (MkStorageAddr address) val = 
+writeStorageHelper {c} (MkStorageAddr address) val = do
+    builder <- createSegmentBuilder
+    let res = freeze $ encode val builder
     let staticSize = isJust (size @{c})
-     in rawStorageWrite staticSize address (encode val)
-
+    rawStorageWrite staticSize address res
 
 
 -- Higher level API
+-- allows custom storage schemes
+public export
+interface StorageScheme s where
+    fromStorageAddr : Felt -> s
+
+-- default Storage Scheme
 public export
 data StorageSpace : (params: List Type) -> (result: Type)-> Type where
   MkStorageSpace : (addr: Felt) -> StorageSpace params result
@@ -144,6 +152,11 @@ data StorageSpace : (params: List Type) -> (result: Type)-> Type where
 public export
 StorageSlot : Type -> Type
 StorageSlot = StorageSpace []
+
+-- default implementation
+public export
+StorageScheme (StorageSpace params result) where
+    fromStorageAddr = MkStorageSpace
 
 public export %inline
 readStorageVar : View m => Codable e => StorageSlot e -> m e
@@ -156,8 +169,8 @@ writeStorageVar (MkStorageSpace addr) val = writeStorage (MkStorageAddr addr) va
 public export %inline
 at : Codable p => {ps: List Type} -> StorageSpace (p::ps) r -> p -> (StorageSpace ps r)
 at {ps=[]} (MkStorageSpace addr) p = 
-  let seg = encode p
+  let seg = segmentEncode p
    in MkStorageSpace (normalizeAddress $ computeAddress addr seg)
 at {ps=_} (MkStorageSpace addr) p = 
-  let seg = encode p
+  let seg = segmentEncode p
    in MkStorageSpace (computeAddress addr seg)

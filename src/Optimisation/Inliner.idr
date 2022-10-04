@@ -2,13 +2,17 @@ module Optimisation.Inliner
 
 import Data.SortedSet
 import Data.SortedMap
+import Data.List
+import Data.Maybe
 import Data.String
-import Core.Context
+
+import CairoCode.Name
 import CairoCode.CairoCode
 import CairoCode.CairoCodeUtils
 import Utils.Helpers
 import CairoCode.Traversal.Base
 import Optimisation.DeadCodeElimination
+import RewriteRules.TailBranchFolder
 
 import Optimisation.StaticProcessing.IterativeBaseTransformer
 import Optimisation.StaticProcessing.StaticTracker
@@ -20,45 +24,32 @@ import Debug.Trace
 
 %hide Prelude.toList
 
-isMachineName : Name -> Bool
-isMachineName (NS _ innerName) = isMachineName innerName
-isMachineName (PV innerName _) = isMachineName innerName
-isMachineName (DN _ innerName) = isMachineName innerName
-isMachineName (Nested _ innerName) = isMachineName innerName
-isMachineName (UN _ ) = False
-isMachineName (MN _ _) = True
-isMachineName _ = True
-
-
-inline : RegisterGen -> Int -> Name -> FunData -> (RegisterGen, Maybe (List (InstVisit CairoReg)))
+inline : RegisterGen -> Int -> CairoName -> FunData -> (RegisterGen, Maybe (List (InstVisit CairoReg)))
 inline regGen inlineDepth curName fd@(MKFunData name target@(FunDef params implsTrg _ insts) implsIn implsOut args rets) = (snd splitRegGen, Just returnElevated)
        where splitRegGen : (RegisterGen, RegisterGen)
              splitRegGen = splitRegisterGen regGen
-             inlineRegGen : RegisterGen
-             inlineRegGen = fst splitRegGen
-             paramRegs : SortedMap CairoReg CairoReg
-             paramRegs = fromList $ (zip params (map resolveInfToReg args))
-                            ++ (map (\(impl,freg) => (freg, resolveImpl impl)) (toList $implsTrg))
-                where resolveImpl : LinearImplicit -> CairoReg
-                      resolveImpl lin = fromMaybe (assert_total $ idris_crash "Call is missing linear implicit param") (maybeMap resolveInfToReg (lookup lin implsIn))
-             substituted : (Name, CairoDef)
-             substituted = substituteDefRegisters subs (name, target)
-                where increaseDepth : CairoReg -> CairoReg
+             substituted : (CairoName, CairoDef)
+             substituted = let paramRegs = fromList $ (zip params (map resolveInfToReg args)) ++ (map (\(impl,freg) => (freg, resolveImplIn impl)) (toList implsTrg)) in
+                substituteDefRegisters (subs (fst splitRegGen) paramRegs) (name, target)
+                where resolveImplIn : LinearImplicit -> CairoReg
+                      resolveImplIn lin = fromMaybe (assert_total $ idris_crash "Call is missing linear implicit param") (maybeMap resolveInfToReg (lookup lin implsIn))
+                      increaseDepth : CairoReg -> CairoReg
                       increaseDepth (Unassigned p i d) = (Unassigned p i (d+inlineDepth))
+                      -- Inliner Should run after RegAlloc so this should not happen
                       increaseDepth (Local i d) = (Local i (d+inlineDepth))
                       increaseDepth (Let i d) = (Let i (d+inlineDepth))
                       increaseDepth (Temp i d) = (Temp i (d+inlineDepth))
                       increaseDepth r = r
-                      subs : CairoReg -> Maybe CairoReg
-                      subs (Const c) = Nothing
-                      subs (Eliminated (Replacement reg)) = case (subs reg) of
+                      subs : RegisterGen -> SortedMap CairoReg CairoReg -> CairoReg -> Maybe CairoReg
+                      subs _ _ (Const c) = Nothing
+                      subs regGen paramRegs (Eliminated (Replacement reg)) = case (subs regGen paramRegs reg) of
                         (Just nReg@(Eliminated _)) => Just nReg
                         (Just nReg) => Just $ Eliminated (Replacement nReg)
                         Nothing => Nothing
-                      subs (Eliminated _) = Nothing
-                      subs reg = case lookup reg paramRegs of
-                        (Just nReg) => Just nReg
-                        Nothing => Just $ increaseDepth $ deriveRegister inlineRegGen reg
+                      subs _ _ (Eliminated _) = Nothing
+                      subs regGen paramRegs reg = case lookup reg paramRegs of
+                        Nothing => Just $ increaseDepth $ deriveRegister regGen reg
+                        nReg => nReg
              -- todo: Note: For this to work our seamantics must be limited to have returns in tail positions
              --       - This holds for idris code
              --       - However, imperative programmers expect a different return semantic
@@ -66,10 +57,10 @@ inline regGen inlineDepth curName fd@(MKFunData name target@(FunDef params impls
              returnElevated = snd $ runVisitConcatCairoDef (replaceReturn, ()) substituted
                 where replaceReturn : InstVisit CairoReg ->  Traversal () (List (InstVisit CairoReg))
                       replaceReturn (VisitFunction _ _ _ _ _) = pure []
-                      replaceReturn VisitEndFunction= pure []
-                      replaceReturn (VisitReturn retRegs retImpls) = pure $ (zipWith (\a,r => VisitAssign (fst a) r) rets retRegs)  ++ map (\(lin,r) => VisitAssign (resolveImpl lin) r) (toList retImpls)
-                        where resolveImpl : LinearImplicit -> CairoReg
-                              resolveImpl lin = fromMaybe (assert_total $ idris_crash "Call is missing linear implicit return") (maybeMap fst (lookup lin implsOut))
+                      replaceReturn VisitEndFunction = pure []
+                      replaceReturn (VisitReturn retRegs retImpls) = pure $ (zipWith (\a,r => VisitAssign (fst a) r) rets retRegs) ++ map (\(lin,r) => VisitAssign (resolveImplOut lin) r) (toList retImpls)
+                        where resolveImplOut : LinearImplicit -> CairoReg
+                              resolveImplOut lin = fromMaybe (assert_total $ idris_crash "Call is missing linear implicit return") (maybeMap fst (lookup lin implsOut))
                       replaceReturn inst = pure [inst]
 inline regGen _ _ fd  = (regGen, Nothing)
 
@@ -97,12 +88,12 @@ Show GraphInfo where
     show (MkGraphInfo c1 h1) = "GraphInfo: "++(show c1)++" - "++ (show h1)
 
 Semigroup GraphInfo where
-    (<+>) (MkGraphInfo c1 h1) (MkGraphInfo c2 h2) = MkGraphInfo (union c1 c2) (max h1 h2)
+    (<+>) (MkGraphInfo c1 h1) (MkGraphInfo c2 h2) = MkGraphInfo (foldl (\acc, e => insert e acc) c1 c2) (max h1 h2)
 
 Monoid GraphInfo where
     neutral = MkGraphInfo empty 0
 
-traverseGraph : Color -> SortedMap Name GraphInfo -> SortedMap Name CairoDef -> (Name, CairoDef) -> (GraphInfo , (Color, SortedMap Name GraphInfo))
+traverseGraph : Color -> SortedMap CairoName GraphInfo -> SortedMap CairoName CairoDef -> (CairoName, CairoDef) -> (GraphInfo , (Color, SortedMap CairoName GraphInfo))
 traverseGraph colorGen inf _ def@(curName, ForeignDef _ _ _) = (neutral, (colorGen, insert curName neutral inf))
 traverseGraph colorGen inf allDefs def@(curName,_) = case lookup curName inf of
         -- not yet processed node
@@ -116,43 +107,74 @@ traverseGraph colorGen inf allDefs def@(curName,_) = case lookup curName inf of
         -- already finished node
         (Just _) => (neutral,(colorGen,inf))
 
-    where dependencyCollector : (Color, GraphInfo, SortedMap Name GraphInfo) -> InstVisit CairoReg -> (Color, GraphInfo, SortedMap Name GraphInfo)
+    where dependencyCollector : (Color, GraphInfo, SortedMap CairoName GraphInfo) -> InstVisit CairoReg -> (Color, GraphInfo, SortedMap CairoName GraphInfo)
           dependencyCollector (colorGen, accInfo, cInf) (VisitCall _ _ name _) = case lookup name allDefs of
             Nothing => trace "Ups how can this happen" (colorGen, accInfo, cInf)
             (Just cDef) => let (gInf, (nCGen, nInf)) = traverseGraph colorGen cInf allDefs (name, cDef) in (nCGen, accInfo <+> gInf, nInf)
           dependencyCollector state _ = state
 
-collectGraphInfo : SortedMap Name CairoDef -> SortedMap Name GraphInfo
+collectGraphInfo : SortedMap CairoName CairoDef -> SortedMap CairoName GraphInfo
 collectGraphInfo allDefs = snd $ foldl traverseGraphHead (0, empty) (toList allDefs)
-    where traverseGraphHead : (Color, SortedMap Name GraphInfo) -> (Name, CairoDef) -> (Color, SortedMap Name GraphInfo)
+    where traverseGraphHead : (Color, SortedMap CairoName GraphInfo) -> (CairoName, CairoDef) -> (Color, SortedMap CairoName GraphInfo)
           traverseGraphHead (colorGen, inf) def = snd $ traverseGraph colorGen inf allDefs def
 
-isRecursiveSave : SortedMap Name GraphInfo -> Name -> Name -> Bool
+isRecursiveSave : SortedMap CairoName GraphInfo -> CairoName -> CairoName -> Bool
 isRecursiveSave inf into from = case (lookup into inf, lookup from inf) of
     (Just (MkGraphInfo c1 h1), Just (MkGraphInfo c2 h2)) => c2 == empty || (intersection c1 c2 /= empty && h1 > h2)
     _ => False
-
 
 -- Note: This was performant.
 --  However:
 --      1. Results could be suboptimal - resulting in semi inlined semi duplicated recursive functions
 --      2. Require that a topological orderer did run before the inline pass
 --      3. Are decider sensitive and a custom decider (like the one from apply_outline) could in theory run endlessly
--- isRecursiveSave : Name -> Name -> Bool
+-- isRecursiveSave : CairoName -> CairoName -> Bool
 -- isRecursiveSave into from = into /= from
 
 public export
 InlineDecider : Type
-InlineDecider = Name -> FunData -> Bool
+InlineDecider = SortedMap CairoName CairoDef -> CairoName -> FunData -> Bool
 
-localInlining : InlineDecider -> RegisterGen -> List (Name, CairoDef) -> List (Name, CairoDef)
-localInlining inlineDecider regGen allDefs = iterativeCallTransform @{config} (regGen, (collectGraphInfo (fromList allDefs))) allDefs -- trace (show $ collectGraphInfo (fromList allDefs)) allDefs  --
-    where [config] IterativeTransformerConf (RegisterGen,  SortedMap Name GraphInfo) where
-                -- Todo: note the collectGraphInfo curDefs makes this to O(n^2) if this a problem try to only do it if a closure became a Call
-                cleanUp (rg, gInf) curDefs def = ((rg, collectGraphInfo curDefs), eliminateDeadCode $ localStaticOptimizeDef' curDefs def)
-                funTransformer (rg, gInf) depth intoName fd = if (isRecursiveSave gInf intoName fd.function) && (inlineDecider intoName fd)
-                    then let (nRegGen, res) = inline rg depth intoName fd in ((nRegGen,gInf), (res,Nil))
-                    else ((rg, gInf), (Nothing,Nil))
+-- Safety Measure against infinite loop Bugs
+-- And allows to test stuff & find them
+-- A finished Product should not need this
+inlineThreshold : Nat
+inlineThreshold = 0
+
+underLimit : Nat -> Bool
+underLimit n = if n < inlineThreshold || inlineThreshold == Z   -- We use Z to signale disabling of this feature
+    then True
+    else trace "Inline Limit Reached" False
+
+recollectCollectGraphInfo : SortedMap CairoName GraphInfo ->  SortedMap CairoName CairoDef -> (CairoName, CairoDef) -> (CairoName, CairoDef) -> SortedMap CairoName GraphInfo
+recollectCollectGraphInfo _ curDefs _ (name,def) = collectGraphInfo (insert name def curDefs)
+{-
+-- As it runs on every inline this can lead to a O(n^2) complexity as itself is already O(n)
+-- Todo: This probably needs some updating of the graph to remove the inlined edge -- as it is just performance this is delayed
+recollectCollectGraphInfo oldGraphInfo curDefs oDef nDef = if (collectDependency oDef) /= (collectDependency nDef)
+            then collectGraphInfo (insert (fst nDef) (snd nDef) curDefs)
+            else oldGraphInfo
+    where dependencyCollector : InstVisit CairoReg -> SortedSet CairoName
+          dependencyCollector (VisitCall _ _ name _) = singleton name
+          dependencyCollector _ = empty
+          -- Note: The Idris default implementation is slow, this is faster in the cases where it matters
+          Semigroup (SortedSet CairoName) where
+              (<+>) a b = if a == b
+                  then a
+                  else foldl (\acc, e => insert e acc) a b
+          collectDependency : (CairoName, CairoDef) -> SortedSet CairoName
+          collectDependency def = snd $ runVisitConcatCairoDef (pureTraversal dependencyCollector) def
+-}
+
+localInlining : Bool -> InlineDecider -> RegisterGen -> List (CairoName, CairoDef) -> List (CairoName, CairoDef)
+localInlining tailBranchingActive inlineDecider regGen allDefs = iterativeCallTransform @{config} (regGen, (collectGraphInfo (fromList allDefs)), Z) allDefs
+    where [config] IterativeTransformerConf (RegisterGen,  SortedMap CairoName GraphInfo, Nat) where
+                cleanUp (rg, gInf, c) curDefs def = let tailDef = if tailBranchingActive then tailBranchDef def else def in
+                    let nDef = eliminateDeadCode $ localStaticOptimizeDef' (insert (fst tailDef) (snd tailDef) curDefs) tailDef in
+                    ((rg, recollectCollectGraphInfo gInf curDefs def nDef, c), nDef)
+                funTransformer (rg, gInf, c) curDefs depth intoName fd = if (underLimit c) && (isRecursiveSave gInf intoName fd.function) && (inlineDecider curDefs intoName fd)
+                    then let (nRegGen, res) = inline rg depth intoName fd in ((nRegGen,gInf, S c), (res,Nil))
+                    else ((rg, gInf, c), (Nothing,Nil))
 
 export
 containsClosure : StaticInfo -> Bool
@@ -163,8 +185,8 @@ containsClosure _ = False
 -- Somehow Elab makes problem if we gen Machine generated names
 --  As alternative we treat some namespaces as if they were machine generated
 --  A real inline decider in the end will be more elaborate then on a per name basis anyway (so just temp)
-isSpecialNamespace : Name -> Bool
-isSpecialNamespace name = "Main_ABI_Wrapper" `isPrefixOf` (cairoName name)
+isSpecialNamespace : CairoName -> Bool
+isSpecialNamespace name = ["Main","ABI","Wrapper"] `isPrefixOf` (extractNamespace name)
 
 isConstant : StaticInfo -> Bool
 isConstant (MKStaticInfo _ (Const values)) = case (toList values) of
@@ -177,11 +199,9 @@ isConstant (MKStaticInfo _ (Closure (Just (name, miss)) args)) = all isConstant 
 isConstant (MKStaticInfo _ (Field src (Just t) p)) = isConstant src -- if src is constant this should already have been resolved
 isConstant _ = False
 
-blockedName : Name -> Name -> Bool
-blockedName _ _ = False
-
 -- A good one would need a size metric instead of counting all as one
 -- This is just some feel good metric
+-- Todo: Make Configurable
 smallInlineLimit : Nat -> Nat -> Nat
 smallInlineLimit nargs nrs = 2*(nargs+nrs)+2
 
@@ -197,16 +217,14 @@ fullSizeRec acc (x::rest) = fullSizeRec (acc+1) rest
 fullSize : List CairoInst -> Nat
 fullSize ls = fullSizeRec 0 ls
 
--- Todo: an inline light version would be nice
---  it could run after curring
---  it should only inline small functions & functions with a single call side
 
-eagerMachineInlineDecider : SortedMap Name Nat ->  Name -> FunData -> Bool
-eagerMachineInlineDecider counts intoName (MKFunData name (FunDef _ impls _ body) appliedImpls _ args rs) = if ((keys impls) /= (keys appliedImpls)) || (blockedName intoName name)
-    then False
-    else (isGenerated || hasClosureArgs || argsAreConstant || isSingleUse || isSmall)
+
+eagerMachineInlineDecider : Maybe Nat -> SortedMap CairoName Nat -> SortedMap CairoName CairoDef -> CairoName -> FunData -> Bool
+eagerMachineInlineDecider sizeLimit counts allDefs intoName (MKFunData name (FunDef _ impls _ body) appliedImpls _ args rs) = if (keys impls) /= (keys appliedImpls)
+        then False
+        else limitCheck && (isGenerated || hasClosureArgs || argsAreConstant || isSingleUse || isSmall)
     where isGenerated : Bool
-          isGenerated = isMachineName name || isSpecialNamespace name
+          isGenerated = isMachineGenerated name || isSpecialNamespace name
           hasClosureArgs : Bool
           hasClosureArgs = any containsClosure (args ++ (map snd rs))
           argsAreConstant : Bool
@@ -215,11 +233,15 @@ eagerMachineInlineDecider counts intoName (MKFunData name (FunDef _ impls _ body
           isSmall = (fullSize body) <= smallInlineLimit (length args) (length rs)
           isSingleUse : Bool
           isSingleUse = lookup name counts == (Just 1)
+          limitCheck : Bool
+          limitCheck = case (sizeLimit, lookup intoName allDefs) of
+            (Just limit, Just (FunDef _ _ _ outerBody)) => fullSize outerBody <= limit
+            (Just limit, Just (ExtFunDef _ _ _ _ outerBody)) => fullSize outerBody <= limit
+            _ => False
+eagerMachineInlineDecider _ _ _ _ _ = False
 
-eagerMachineInlineDecider _ _ _ = False
-
-saveInlineDecider : SortedMap Name Nat ->  Name -> FunData -> Bool
-saveInlineDecider counts intoName (MKFunData name (FunDef _ impls _ body) appliedImpls _ args rs) = if ((keys impls) /= (keys appliedImpls)) || (blockedName intoName name)
+saveInlineDecider : SortedMap CairoName Nat -> SortedMap CairoName CairoDef -> CairoName -> FunData -> Bool
+saveInlineDecider counts _ intoName (MKFunData name (FunDef _ impls _ body) appliedImpls _ args rs) = if (keys impls) /= (keys appliedImpls)
     then False
     else (isSingleUse || isSmall)
     where isSmall : Bool
@@ -227,11 +249,11 @@ saveInlineDecider counts intoName (MKFunData name (FunDef _ impls _ body) applie
           isSingleUse : Bool
           isSingleUse = lookup name counts == (Just 1)
 
-saveInlineDecider _ _ _ = False
+saveInlineDecider _ _ _ _ = False
 
-countUsages : List (Name, CairoDef) -> SortedMap Name Nat
+countUsages : List (CairoName, CairoDef) -> SortedMap CairoName Nat
 countUsages defs = snd $ runVisitConcatCairoDefs (pureTraversal amountCollector) defs
-    where amountCollector : InstVisit CairoReg -> SortedMap Name Nat
+    where amountCollector : InstVisit CairoReg -> SortedMap CairoName Nat
           amountCollector (VisitCall _ _ name _) = singleton name 1
           amountCollector (VisitMkClosure _ name _ _) = singleton name 1
           amountCollector _ = empty
@@ -239,14 +261,14 @@ countUsages defs = snd $ runVisitConcatCairoDefs (pureTraversal amountCollector)
           Monoid Nat where neutral = 0
 
 export
-inlineCustomDefs : InlineDecider -> List (Name, CairoDef) -> List (Name, CairoDef)
-inlineCustomDefs decider defs = localInlining decider (mkRegisterGen "inliner") defs
+inlineCustomDefs : Bool -> InlineDecider -> List (CairoName, CairoDef) -> List (CairoName, CairoDef)
+inlineCustomDefs tailBranchingActive decider defs = localInlining tailBranchingActive decider (mkRegisterGen "inliner") (map orderUnassignedRegIndexes defs)
 
 export
-inlineDefs : List (Name, CairoDef) -> List (Name, CairoDef)
-inlineDefs defs = inlineCustomDefs (eagerMachineInlineDecider (countUsages defs)) defs
+inlineDefs : Maybe Nat -> Bool -> List (CairoName, CairoDef) -> List (CairoName, CairoDef)
+inlineDefs sizeLimit tailBranchingActive defs = let decider = eagerMachineInlineDecider sizeLimit (countUsages defs) in inlineCustomDefs tailBranchingActive decider defs
 
 export
-inlineSaveDefs : List (Name, CairoDef) -> List (Name, CairoDef)
-inlineSaveDefs defs = inlineCustomDefs (saveInlineDecider (countUsages defs)) defs
+inlineSaveDefs : Bool ->  List (CairoName, CairoDef) -> List (CairoName, CairoDef)
+inlineSaveDefs tailBranchingActive defs = let decider = saveInlineDecider (countUsages defs) in inlineCustomDefs tailBranchingActive decider defs
 

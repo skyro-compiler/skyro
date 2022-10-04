@@ -16,7 +16,7 @@ data SegmentBuilder : Type where
     "imports:starkware.cairo.common.alloc alloc"
     """
     code:
-    func Common_Segment_createSegmentBuilderPrim(world) -> (world, builder):
+    func $name$(world) -> (world, builder):
         let (segPtr) = alloc()
         tempvar builder = new (0, segPtr)
         return (world, cast(builder,felt))
@@ -32,7 +32,7 @@ export
 %foreign 
     """
     code:
-    func Common_Segment_append(value, builder) -> (builder):
+    func $name$(value, builder) -> (builder):
        let segment = [builder+1]
        let size = [builder]
        assert [segment + size] = value # Append value
@@ -51,7 +51,7 @@ export
 %foreign 
     """
     code:
-    func Common_Segment_index(index, segment) -> (result):
+    func $name$(index, segment) -> (result):
        return ([[segment+1]+index])
     end
     """
@@ -61,7 +61,7 @@ export
 %foreign 
     """
     code:
-    func Common_Segment_size(segment) -> (result):
+    func $name$(segment) -> (result):
        return ([segment])
     end
     """
@@ -71,18 +71,17 @@ export
 %foreign 
     """
     code:
-    func Common_Segment_mem(segment) -> (result):
+    func $name$(segment) -> (result):
        return ([segment+1])
     end
     """
-mem : Segment -> Memory
-
+mem : Segment -> CairoPtr Memory
 
 export
 %foreign
     """
     code:
-    func Common_Segment_unsafeTake(amount,segment) -> (result):
+    func $name$(amount,segment) -> (result):
        let segment = [segment+1]
        tempvar newSegment = new (amount, segment)
        return (cast(newSegment, felt))
@@ -91,10 +90,17 @@ export
 unsafeTake : Felt -> Segment -> Segment
 
 export
+take : Felt -> Segment -> Maybe Segment
+take amount segment =
+  if size segment > amount
+    then Nothing
+    else Just $ unsafeTake amount segment
+
+export
 %foreign
     """
     code:
-    func Common_Segment_unsafeDrop(amount,segment) -> (result):
+    func $name$(amount,segment) -> (result):
        let segment = [segment+1]
        let size = [segment]
        tempvar newSegment = new (size - amount, segment + amount)
@@ -104,10 +110,17 @@ export
 unsafeDrop : Felt -> Segment -> Segment
 
 export
+drop : Felt -> Segment -> Maybe Segment
+drop amount segment =
+  if size segment > amount
+    then Nothing
+    else Just $ unsafeDrop amount segment
+
+export
 %foreign 
     """
     code:
-    func Common_Segment_unsafeHead(segment) -> (result):
+    func $name$(segment) -> (result):
         if [segment] == 0:
             assert 1 = 0
         end
@@ -116,6 +129,7 @@ export
     """
 unsafeHead : Segment -> Felt
 
+export
 head : Segment -> Maybe Felt
 head segment = 
   if size segment == 0 
@@ -126,7 +140,7 @@ export
 %foreign 
     """
     code:
-    func Common_Segment_unsafeTail(segment) -> (result):
+    func $name$(segment) -> (result):
         if [segment] == 0:
             assert 1 = 0
         end
@@ -136,25 +150,12 @@ export
     """
 unsafeTail : Segment -> Segment
 
+export
 tail : Segment -> Maybe Segment
 tail segment = 
   if size segment == 0 
     then Nothing
     else Just (unsafeTail segment)
-
-
-%foreign 
-    "apStable:True"
-    "imports:starkware.cairo.common.alloc alloc"
-    """
-    code:
-    func Common_Segment_unsafeCreateSegmentBuilder() -> (builder):
-        let (segPtr) = alloc()
-        tempvar builder = new (0, segPtr)
-        return (cast(builder,felt))
-    end
-    """
-unsafeCreateSegmentBuilder : SegmentBuilder
 
 public export
 %foreign 
@@ -162,7 +163,7 @@ public export
     "imports:starkware.cairo.common.alloc alloc"
     """
     code:
-    func Common_Segment_singletonSegment(value) -> (segment):
+    func $name$(value) -> (segment):
         let (segPtr) = alloc()
         assert [segPtr] = value
         tempvar builder = new (1, segPtr)
@@ -176,7 +177,7 @@ public export
     "apStable:True"
     """
     code:
-    func Common_Segment_emptySegment() -> (segment):
+    func $name$() -> (segment):
         tempvar builder = new (0, 0)
         return (cast(builder,felt))
     end
@@ -184,13 +185,52 @@ public export
 emptySegment : Segment
 
 
+-- todo: is this save (I do not think so)
+-- export
+-- listToSegment : List Felt -> Segment
+-- listToSegment list = freeze (buildSegment list unsafeCreateSegmentBuilder)
+--     where buildSegment : List Felt -> SegmentBuilder -> SegmentBuilder
+--           buildSegment []      builder = builder
+--           buildSegment (f::fs) builder = buildSegment fs (append f builder)
+
+---------- Skyro Code but with Idris Syntax (so no linearity etc) -------
+-- let a = listToSegment [1,2]
+-- let b = listToSegment [3,4]
+---------- Inline -----------------
+-- let a = freeze (buildSegment [1,2] unsafeCreateSegmentBuilder)
+-- let b = freeze (buildSegment [3,4] unsafeCreateSegmentBuilder)
+---------- Deduplication ----------
+-- let shared = unsafeCreateSegmentBuilder
+-- let a = freeze (buildSegment [1,2] shared)
+-- let b = freeze (buildSegment [3,4] shared) -- will throw error as it tries to overwrite 1
+-----------------------------------
+
+-- Option 1: Make Copy On Write Segment -- needs Hints
+-- Option 2: Make listToSegment in Cairo Code -- requires knowledge about List representation
+-- Option 3: Make an abstraction that builds the segment based on the input
+
+-- Used Option 3
+--  This works as if the list is the same its save to return the same SegmentBuilder
+--   because Skyro will write the same Felt values at the same position and as writing = asserting it works
+%foreign
+    "apStable:True"
+    "imports:starkware.cairo.common.alloc alloc"
+    """
+    code:
+    func $name$(unused) -> (builder):
+        let (segPtr) = alloc()
+        tempvar builder = new (0, segPtr)
+        return (cast(builder,felt))
+    end
+    """
+unsafeCreateSegmentBuilderForList : List Felt -> SegmentBuilder
+
 export
 listToSegment : List Felt -> Segment
-listToSegment list = freeze (buildSegment list unsafeCreateSegmentBuilder)
+listToSegment list = freeze (buildSegment list (unsafeCreateSegmentBuilderForList list))
   where buildSegment : List Felt -> SegmentBuilder -> SegmentBuilder
         buildSegment []      builder = builder
         buildSegment (f::fs) builder = buildSegment fs (append f builder)
-
 
 export
 segmentToList : Segment -> List Felt
@@ -210,7 +250,7 @@ public export
     "imports:starkware.cairo.common.alloc alloc, starkware.cairo.common.memcpy memcpy"
     """
     code:
-    func Common_Segment_concat(xs, ys) -> (res):
+    func $name$(xs, ys) -> (res):
         alloc_locals
         let (local segPtr) = alloc()
         let sizeX = [xs]
@@ -226,3 +266,6 @@ concat : Segment -> Segment -> Segment
 public export %inline
 (++) : Segment -> Segment -> Segment
 (++) = concat
+
+
+

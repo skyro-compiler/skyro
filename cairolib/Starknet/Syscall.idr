@@ -9,7 +9,7 @@ import Common.Segment
     "untupled:(_,_)"
     """
     code:
-    func Starknet_Syscall_getBlockTimestampPrim(syscall_ptr) -> (syscall_ptr, result):
+    func $name$(syscall_ptr) -> (syscall_ptr, result):
         let syscall_ptr_ = cast(syscall_ptr, felt*)
         let (result) = get_block_timestamp{syscall_ptr = syscall_ptr_}()
         return (cast(syscall_ptr_, felt), result)
@@ -27,7 +27,7 @@ getBlockTimestampHelper = fromPrimCairo getBlockTimestampPrim
     "untupled:(_,_)"
     """
     code:
-    func Starknet_Syscall_getBlockNumberPrim(syscall_ptr) -> (syscall_ptr, result):
+    func $name$(syscall_ptr) -> (syscall_ptr, result):
         let syscall_ptr_ = cast(syscall_ptr, felt*)
         let (result) = get_block_number{syscall_ptr = syscall_ptr_}()
         return (cast(syscall_ptr_, felt), result)
@@ -45,7 +45,7 @@ getBlockNumberHelper = fromPrimCairo getBlockNumberPrim
     "untupled:(_,_)"
     """
     code:
-    func Starknet_Syscall_getCallerAddressPrim(syscall_ptr) -> (syscall_ptr, result):
+    func $name$(syscall_ptr) -> (syscall_ptr, result):
         let syscall_ptr_ = cast(syscall_ptr, felt*)
         let (result) = get_caller_address{syscall_ptr = syscall_ptr_}()
         return (cast(syscall_ptr_, felt), result)
@@ -63,7 +63,7 @@ getCallerAddressHelper = fromPrimCairo getCallerAddressPrim
     "untupled:(_,_)"
     """
     code:
-    func Starknet_Syscall_getContractAddressPrim(syscall_ptr) -> (syscall_ptr, result):
+    func $name$(syscall_ptr) -> (syscall_ptr, result):
         let syscall_ptr_ = cast(syscall_ptr, felt*)
         let (result) = get_contract_address{syscall_ptr = syscall_ptr_}()
         return (cast(syscall_ptr_, felt), result)
@@ -81,7 +81,7 @@ getContractAddressHelper = fromPrimCairo getContractAddressPrim
     "untupled:(_,_)"
     """
     code:
-    func Starknet_Syscall_getSequencerAddressPrim(syscall_ptr) -> (syscall_ptr, result):
+    func $name$(syscall_ptr) -> (syscall_ptr, result):
         let syscall_ptr_ = cast(syscall_ptr, felt*)
         let (result) = get_sequencer_address{syscall_ptr = syscall_ptr_}()
         return (cast(syscall_ptr_, felt), result)
@@ -102,17 +102,17 @@ getSequencerAddressHelper = fromPrimCairo getSequencerAddressPrim
     "untupled:(_,_)"
     """
     code:
-    func Starknet_Syscall_deployPrim(class_hash, contract_address_salt, constructor_calldata, syscall_ptr) -> (syscall_ptr, result):
+    func $name$(class_hash, contract_address_salt, constructor_calldata, deploy_from_zero, syscall_ptr) -> (syscall_ptr, result):
         let syscall_ptr_ = cast(syscall_ptr, felt*)
-        let (result) = deploy{syscall_ptr = syscall_ptr_}(class_hash, contract_address_salt, [constructor_calldata], cast([constructor_calldata+1],felt*))
+        let (result) = deploy{syscall_ptr = syscall_ptr_}(class_hash, contract_address_salt, [constructor_calldata], cast([constructor_calldata+1],felt*), deploy_from_zero)
         return (cast(syscall_ptr_, felt), result)
     end
     """
-deployPrim : Felt -> Felt -> Segment -> PrimCairo Felt 
+deployPrim : Felt -> Felt -> Segment -> Felt -> PrimCairo Felt
 
 public export %inline 
-deployHelper : Felt -> Felt -> Segment -> Cairo Felt
-deployHelper classHash contractAddressSalt constructorCalldata = fromPrimCairo (deployPrim classHash contractAddressSalt constructorCalldata)
+deployHelper : Felt -> Felt -> Segment -> Felt -> Cairo Felt
+deployHelper classHash contractAddressSalt constructorCalldata deploy_from_zero = fromPrimCairo (deployPrim classHash contractAddressSalt constructorCalldata deploy_from_zero)
 
 
 %foreign 
@@ -120,7 +120,7 @@ deployHelper classHash contractAddressSalt constructorCalldata = fromPrimCairo (
     "untupled:(_,_)"
     """
     code:
-    func Starknet_Syscall_callContractPrim(contract_address, function_selector, calldata, syscall_ptr) -> (syscall_ptr, result):
+    func $name$(contract_address, function_selector, calldata, syscall_ptr) -> (syscall_ptr, result):
         let syscall_ptr_ = cast(syscall_ptr, felt*)
         let (retdata_size, retdata) = call_contract{syscall_ptr = syscall_ptr_}(contract_address, function_selector, [calldata], cast([calldata+1],felt*))
         return (cast(syscall_ptr_, felt),  cast(new (retdata_size, retdata), felt))
@@ -138,7 +138,7 @@ callContractHelper contractAddress functionSelector calldata = fromPrimCairo (ca
     "untupled:(_,_)"
     """
     code:
-    func Starknet_Syscall_libraryCallPrim(class_hash, function_selector, calldata, syscall_ptr) -> (syscall_ptr, result):
+    func $name$(class_hash, function_selector, calldata, syscall_ptr) -> (syscall_ptr, result):
         let syscall_ptr_ = cast(syscall_ptr, felt*)
         let (retdata_size, retdata) = library_call{syscall_ptr = syscall_ptr_}(class_hash, function_selector, [calldata], cast([calldata+1],felt*))
         return (cast(syscall_ptr_, felt),  cast(new (retdata_size, retdata), felt))
@@ -156,7 +156,7 @@ libraryCallHelper classHash functionSelector calldata = fromPrimCairo (libraryCa
     "untupled:(_,_)"
     """
     code:
-    func Starknet_Syscall_libraryCallL1HandlerPrim(class_hash, function_selector, calldata, syscall_ptr) -> (syscall_ptr, result):
+    func $name$(class_hash, function_selector, calldata, syscall_ptr) -> (syscall_ptr, result):
         let syscall_ptr_ = cast(syscall_ptr, felt*)
         let (retdata_size, retdata) = library_call_l1_handler{syscall_ptr = syscall_ptr_}(class_hash, function_selector, [calldata], cast([calldata+1],felt*))
         return (cast(syscall_ptr_, felt),  cast(new (retdata_size, retdata), felt))

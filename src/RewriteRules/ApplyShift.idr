@@ -3,9 +3,10 @@ module RewriteRules.ApplyShift
 import Data.SortedMap
 import Data.SortedSet
 import Data.String
+import Data.Maybe
 import CairoCode.CairoCode
 import CairoCode.CairoCodeUtils
-import Core.Context
+import CairoCode.Name
 import CommonDef
 import Utils.Helpers
 import CairoCode.Traversal.Base
@@ -47,26 +48,38 @@ import Debug.Trace
 --        return r
 -- Then: does static optimization + inlining and repeats the process
 
-findCandidates : List (InstVisit CairoReg) ->  SortedMap Name (SortedSet CairoReg)
-findCandidates = search empty
-    where recordCandidate : Name -> CairoReg -> SortedMap Name (SortedSet CairoReg) -> SortedMap Name (SortedSet CairoReg)
+shiftName : CairoName -> CairoName
+shiftName = incrementalExtendName "argument_shifted"
+
+findCandidates : CairoName -> List (InstVisit CairoReg) -> SortedMap CairoName (SortedSet CairoReg)
+findCandidates ctxName = search empty
+    where recordCandidate : CairoName -> CairoReg -> SortedMap CairoName (SortedSet CairoReg) -> SortedMap CairoName (SortedSet CairoReg)
           recordCandidate name reg cands = case lookup name cands of
             Nothing => insert name (singleton reg) cands
             (Just regs) => insert name (insert reg regs) cands
-          search : SortedMap Name (SortedSet CairoReg) -> List (InstVisit CairoReg) -> SortedMap Name (SortedSet CairoReg)
+          search : SortedMap CairoName (SortedSet CairoReg) -> List (InstVisit CairoReg) -> SortedMap CairoName (SortedSet CairoReg)
           -- Todo: extend to multi return:
           --   1 allows this to be used after untupling
           --   2 allows this to be used if source lang has multi return
+
+          -- this case is necessary to prevent endless loop
+          search acc ((VisitCall [r] impls1 name _)::(VisitApply r2 impls2 f _)::(VisitReturn [r3] _)::rest) = if impls1 == empty && impls2 == empty && r == f && (r2 /= r3 || (shiftName name) == ctxName)
+            then search (recordCandidate name r acc) rest
+            else search acc rest
           search acc ((VisitCall [r] impls1 name _)::(VisitApply _ impls2 f _)::rest) = if impls1 == empty && impls2 == empty && r == f
             then search (recordCandidate name r acc) rest
-            else search acc (trace ("Missed Candidate: "++(cairoName name)++" - reason: "++(show (impls1 == empty, impls2 == empty, r == f))) rest)
+            else search acc rest
           search acc ((VisitCall _ _ _ _)::(VisitApply _ _ _ _)::rest) = search acc (trace "Missed due to multi return" rest)
+          -- this is reenebales corner cases that would be missed do to endless loop prevention helper
+          search acc ((VisitMkClosure r1 _ _ _)::(VisitReturn [r2] _)::rest) = if r1 == r2
+            then search (recordCandidate ctxName r1 acc) rest
+            else search acc rest
           search acc (x::xs) = search acc xs
           search acc Nil = acc
 
 -- todo: shall we use generalized traversal here
 -- This counts the usages of the registers to make sure it is not used anywhere else (as it will vanish)
-validateCandidate : List (InstVisit CairoReg) -> (Name, (SortedSet CairoReg)) -> (Name, SortedSet CairoReg)
+validateCandidate : List (InstVisit CairoReg) -> (CairoName, (SortedSet CairoReg)) -> (CairoName, SortedSet CairoReg)
 validateCandidate body (name, regs) = (name, fromList $ keys $ valueFilter (==1) (foldl checkInst empty body))
     where checkReg : SortedMap CairoReg Int -> CairoReg -> SortedMap CairoReg Int
           checkReg count reg = if contains reg regs
@@ -91,21 +104,15 @@ validateCandidate body (name, regs) = (name, fromList $ keys $ valueFilter (==1)
           checkInst count (VisitReturn args _) = checkRegs count args
           checkInst count _ = count
 
-validateCandidates : SortedSet Name -> List (InstVisit CairoReg) -> SortedMap Name (SortedSet CairoReg) -> SortedMap Name (SortedSet CairoReg)
+validateCandidates : SortedSet CairoName -> List (InstVisit CairoReg) -> SortedMap CairoName (SortedSet CairoReg) -> SortedMap CairoName (SortedSet CairoReg)
 validateCandidates validTargets body cands = fromList $ filter (\(k,v) => v /= empty && contains k validTargets) (map (validateCandidate body) (toList cands))
 
-isShifted : Name -> Bool
-isShifted (MN innerName num) = "argument_shifted__" `isPrefixOf` innerName
+isShifted : CairoName -> Bool
+isShifted (Extension "argument_shifted" _ _) = True
 isShifted _ = False
 
-shiftName : Name -> Name
-shiftName name@(MN innerName num) = if "argument_shifted__" `isPrefixOf` innerName
-    then MN innerName (num+1)
-    else MN ("argument_shifted__"++(cairoName name)) 0
-shiftName name = MN ("argument_shifted__"++(cairoName name)) 0
-
-transformCallSite : List (InstVisit CairoReg) -> SortedMap Name (SortedSet CairoReg) -> (SortedSet Name, (Bool, List (InstVisit CairoReg)))
-transformCallSite body targets = (fromList $ keys targets, replace False Nil body)
+transformCallSite : List (InstVisit CairoReg) -> SortedMap CairoName (SortedSet CairoReg) -> (Bool, List (InstVisit CairoReg))
+transformCallSite body targets = replace False Nil body
     where replace : Bool -> List (InstVisit CairoReg) -> List (InstVisit CairoReg) -> (Bool, List (InstVisit CairoReg))
           replace changed acc ((inst1@(VisitCall [r] impls1 name args))::(inst2@(VisitApply r2 impls2 f a))::xs) = if isValid
                 then replace True ((VisitCall [r2] empty (shiftName name) (args++[a]))::acc) xs
@@ -115,7 +122,7 @@ transformCallSite body targets = (fromList $ keys targets, replace False Nil bod
                     Nothing => False
                     (Just regs) => if contains r regs
                         then impls1 == empty && impls2 == empty && r == f
-                        else trace ("Multi-Use Miss: "++show(r)) False
+                        else False
           -- Note: This is only save if it is guaranteed that the target always reutrns a closure
           --          Sadly parameterized functions and dependent types do allow functions that sometimes do and sometimes don't
           --          Dataflow analysis may help here however I doubt that our is powerfull enough to be of substetial use here as closures are its weakspot
@@ -126,76 +133,88 @@ transformCallSite body targets = (fromList $ keys targets, replace False Nil bod
           replace changed acc (x::xs) = replace changed (x::acc) xs
           replace changed acc Nil = (changed, reverse acc)
 
+dbgString : (CairoName, CairoDef) -> String
+dbgString (name, def) = if isShifted name
+  then ("Searching in: "++ (show name)) ++ " - "++ (show def)
+  else ("Searching in: "++ (show name))
 
-dbgString: (Name, CairoDef) -> String
-dbgString (name,def) = if isShifted name
-  then ("Searching in: "++show (cairoName name)++" - "++show def)
-  else ("Searching in: "++show (cairoName name))
-
-processDef : SortedSet Name -> (Name, CairoDef) -> (SortedSet Name, (Bool, (Name, CairoDef)))
+processDef : SortedSet CairoName -> (CairoName, CairoDef) -> (SortedSet CairoName, (Bool, (CairoName, CairoDef)))
 processDef validTargets def = let body = fromCairoDef def in
-    let (shiftNames, (changed, newBody)) = transformCallSite body (validateCandidates validTargets body (findCandidates  body)) in
+    let targets = (validateCandidates validTargets body (findCandidates (fst def) body)) in
+    let (changed, newBody) = transformCallSite body targets in
+    let shiftNames = fromList $ keys targets in
     (shiftNames, (changed, toCairoDef newBody))
 
-generateShiftedDef : RegisterGen -> (Name, CairoDef) -> (RegisterGen, (Name, CairoDef))
-generateShiftedDef regGen (name, (FunDef params impls rets body)) = if impls /= empty
+generateShiftedDef : RegisterGen -> (CairoName, CairoDef) -> (RegisterGen, (CairoName, CairoDef))
+generateShiftedDef regGen def@(name, (FunDef params impls rets body)) = if impls /= empty
         then assert_total $ idris_crash "applyOutline must run before implicit injection"
         else let reg = fst applyParam in
              let visits = fromCairoDef (shiftName name, FunDef (params++[reg]) empty rets body) in
-             let (nRg, nInsts) = foldl transformInst (snd applyParam, Nil) visits in
+             let ((nRg,_), nInsts) = foldl transformInst ((snd applyParam,0), Nil) visits in
              let shiftDef = toCairoDef $ reverse nInsts in
              (nRg, shiftDef)
     where applyParam : (CairoReg, RegisterGen)
           applyParam = nextRegister regGen 0
-          transformInst : (RegisterGen, List (InstVisit CairoReg)) -> InstVisit CairoReg -> (RegisterGen, List (InstVisit CairoReg))
-          transformInst (rg, acc) (VisitReturn [f] impls) = if impls /= empty
+          transformInst : ((RegisterGen,Int), List (InstVisit CairoReg)) -> InstVisit CairoReg -> ((RegisterGen,Int), List (InstVisit CairoReg))
+          transformInst ((rg,d), acc) (VisitReturn [f] impls) = if impls /= empty
                 then assert_total $ idris_crash "applyOutline must run before implicit injection"
-                else let (nreg, nrg) = nextRegister rg 0 in
-                     (nrg, (VisitReturn [nreg] empty)::(VisitApply nreg empty f (fst applyParam))::acc)
-          transformInst (rg, acc) inst@(VisitReturn _ _) = trace "Missed because of multi return" (rg, inst::acc)
-          transformInst (rg, acc) inst = (rg, inst::acc)
+                else let (nreg, nrg) = nextRegister rg d in
+                     ((nrg, d), (VisitReturn [nreg] empty)::(VisitApply nreg empty f (fst applyParam))::acc)
+          transformInst (rgd, acc) inst@(VisitReturn _ _) = trace "Missed because of multi return" (rgd, inst::acc)
+          transformInst ((rg,d), acc) inst@(VisitCase _) = ((rg, d+1), inst::acc)
+          transformInst ((rg,d), acc) VisitCaseEnd = ((rg, d-1), VisitCaseEnd::acc)
+          transformInst (rgd, acc) inst = (rgd, inst::acc)
 generateShiftedDef _ _ = assert_total $ idris_crash "Can not shift external or foreign functions"
 
-generateShiftedDefs : RegisterGen -> SortedMap Name CairoDef -> SortedSet Name -> (RegisterGen, List (Name, CairoDef))
+generateShiftedDefs : RegisterGen -> SortedMap CairoName CairoDef -> SortedSet CairoName -> (RegisterGen, List (CairoName, CairoDef))
 generateShiftedDefs regGen allDefs shiftNames = let shiftDefs = map (\n => (n, (fromMaybe (assert_total $ idris_crash "Unkonwn Name") (lookup n allDefs)))) (toList shiftNames) in
         let newShiftDefs = filter (\(n,_) => isNothing (lookup (shiftName n) allDefs)) shiftDefs in
         foldl generate (regGen, Nil) newShiftDefs
-    where generate : (RegisterGen, List (Name, CairoDef)) -> (Name, CairoDef) -> (RegisterGen, List (Name, CairoDef))
+    where generate : (RegisterGen, List (CairoName, CairoDef)) -> (CairoName, CairoDef) -> (RegisterGen, List (CairoName, CairoDef))
           generate (rg,acc) def = let (nRg,nDef) = generateShiftedDef rg def in (nRg, nDef::acc)
 
 
 -- we inline into the newely generated methods
 --  goal is to lift up applies to resolve recursive structures
 --  for now - we need to target only functions that take in closures as these contain the open applies
-customInliner : List (Name, CairoDef)  -> List (Name, CairoDef)
-customInliner = inlineCustomDefs decider
-    where decider : Name -> FunData -> Bool
-          decider intoName (MKFunData name _ _ _ args _) = isShifted intoName
+customInliner : Bool -> List (CairoName, CairoDef)  -> List (CairoName, CairoDef)
+customInliner tailBranchingActive = inlineCustomDefs tailBranchingActive decider
+    where decider : SortedMap CairoName CairoDef -> CairoName -> FunData -> Bool
+          decider _ intoName (MKFunData name _ _ _ args _) = isShifted intoName
               && intoName /= (shiftName name) -- we do not inline the unshifted as we plan to outline them (inlining them would be contra productive)
               && any containsClosure args
 
-processDefs : RegisterGen -> List (Name, CairoDef) -> (RegisterGen, (Bool, List (Name, CairoDef)))
+processDefs : RegisterGen -> List (CairoName, CairoDef) -> (RegisterGen, (Bool, List (CairoName, CairoDef)))
 processDefs regGen defs = let validTargets = fromList $ map fst (filter isStdFun defs) in
                    let (shiftNames, (changed, nDefs)) = foldl (processEntry validTargets) (empty,(False,Nil)) defs in
-                   let allDefs = fromList defs in
+                   if not changed then (regGen, (False, defs)) else
+                   let allDefs = fromList nDefs in
                    let (nRg, genDefs) = generateShiftedDefs regGen allDefs shiftNames in
-                   (nRg, (changed, genDefs ++ nDefs))
-    where isStdFun : (Name, CairoDef) -> Bool
+                   -- We need to process them again as the shifted in apply may be shifted immediately recursively
+                   --  We can not do this in the first iter because the apply is not theire yet
+                   --  We could do everything afterwards but that complicates the design -- todo: still consider this
+                   -- Todo: as an alternative we can do this in the next pass - if we prevent generation of already generated shifted-defs
+                   -- Todo: simply try removing this the ctxException may have been enough
+                   -- let genDefs2 = map (processGen shiftNames) genDefs in
+                   (nRg, (empty /= genDefs, genDefs ++ nDefs))
+    where isStdFun : (CairoName, CairoDef) -> Bool
           isStdFun (_, FunDef _ _ _ _) = True
           isStdFun _ = False
-          processEntry : SortedSet Name -> (SortedSet Name, (Bool, List (Name, CairoDef))) -> (Name, CairoDef) -> (SortedSet Name, (Bool, List (Name, CairoDef)))
+          -- processGen : SortedSet CairoName -> (CairoName, CairoDef) -> (CairoName, CairoDef)
+          -- processGen shiftNames def = snd $ snd $ processDef shiftNames def
+          processEntry : SortedSet CairoName -> (SortedSet CairoName, (Bool, List (CairoName, CairoDef))) -> (CairoName, CairoDef) -> (SortedSet CairoName, (Bool, List (CairoName, CairoDef)))
           processEntry validTargets (sAcc, (oldC,dAcc)) def = let (shiftNames, (newC, nDef)) = processDef validTargets def in (union sAcc shiftNames, (oldC || newC, nDef::dAcc))
 
 -- Get rid of no longer used defs
 -- Make a generall optimisation pass to turn applies into calls
 -- Make an inlining pass to turn calls into applies (but limited to custom inliner)
-optimizeAfterIter : List (Name, CairoDef)  -> List (Name, CairoDef)
-optimizeAfterIter = customInliner . localStaticOptimizeDefs . orderUsedDefs
+optimizeAfterIter : Bool -> List (CairoName, CairoDef)  -> List (CairoName, CairoDef)
+optimizeAfterIter tailBranchingActive = (customInliner tailBranchingActive) . localStaticOptimizeDefs . orderUsedDefs
 
-processDefsIterative : RegisterGen -> List (Name, CairoDef) -> List (Name, CairoDef)
-processDefsIterative regGen defs = case processDefs regGen defs of
+processDefsIterative : Bool -> RegisterGen -> List (CairoName, CairoDef) -> List (CairoName, CairoDef)
+processDefsIterative tailBranchingActive regGen defs = case processDefs regGen defs of
     (_, (False, nDefs)) => orderUsedDefs nDefs
-    (nRg, (True, nDefs)) => processDefsIterative nRg (optimizeAfterIter nDefs)
+    (nRg, (True, nDefs)) => processDefsIterative tailBranchingActive nRg (optimizeAfterIter tailBranchingActive nDefs)
 
 -- Todo: As Preparation a returnInwardsShift & applyUpwardsShift would be nice
 --       returnInwardsShift = move returns into branches if they are tail pos
@@ -204,5 +223,5 @@ processDefsIterative regGen defs = case processDefs regGen defs of
 --       Otherwise a simple rewrite rule may miss
 --   Note: if code is generated by idris it is probably not necessary in most cases (especially if a programmer writes nice code)
 export
-applyOutlining : List (Name, CairoDef) -> List (Name, CairoDef)
-applyOutlining = processDefsIterative (mkRegisterGen "applyShifting")
+applyOutlining : Bool -> List (CairoName, CairoDef) -> List (CairoName, CairoDef)
+applyOutlining tailBranchingActive = processDefsIterative tailBranchingActive (mkRegisterGen "applyShifting")

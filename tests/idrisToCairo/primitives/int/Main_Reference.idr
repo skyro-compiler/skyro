@@ -19,6 +19,18 @@ main = do
   putStrLn . show $ (the Int8 (3)) `div` (the Int8 (-2))
   putStrLn . show $ (the Int8 (3)) `mod` (the Int8 (-2))
 
+  putStrLn . show $ (the Int8 4) `div` (the Int8 2)
+  putStrLn . show $ (the Int8 4) `mod` (the Int8 2)
+
+  putStrLn . show $ (the Int8 (-4)) `div` (the Int8 (-2))
+  putStrLn . show $ (the Int8 (-4)) `mod` (the Int8 (-2))
+
+  putStrLn . show $ (the Int8 (-4)) `div` (the Int8 (2))
+  putStrLn . show $ (the Int8 (-4)) `mod` (the Int8 (2))
+
+  putStrLn . show $ (the Int8 (4)) `div` (the Int8 (-2))
+  putStrLn . show $ (the Int8 (4)) `mod` (the Int8 (-2))
+
   putStrLn . show $ (the Int8 100) + (the Int8 50) 
   putStrLn . show $ (the Int8 100) - (the Int8 50)
   putStrLn . show $ (the Int8 100) * (the Int8 50)

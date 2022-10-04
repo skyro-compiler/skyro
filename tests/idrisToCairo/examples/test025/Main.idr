@@ -2,7 +2,7 @@ module Main
 import Starknet
 %language ElabReflection
 
-deployCompile : External m => (classHash: Felt) -> (contractAddressSalt: Felt) -> (constructorCalldata: Segment) -> m Felt
+deployCompile : External m => (classHash: Felt) -> (contractAddressSalt: Felt) -> (constructorCalldata: Segment) -> (deployFromZero: Felt) -> m Felt
 deployCompile = deploy
 
 callContractCompile : External m => (contractAddress: Felt) -> (functionSelector: Felt) -> (calldata: Segment) -> m Segment

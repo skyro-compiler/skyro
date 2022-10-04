@@ -1,7 +1,8 @@
 module Primitives.BigInt
 
 import Primitives.Common
-import Core.Context
+-- import Core.Context
+import CairoCode.Name
 import CairoCode.CairoCode
 import Data.SortedSet
 import Data.SortedMap
@@ -10,7 +11,7 @@ import CommonDef
 import Utils.Helpers
 import Data.Bits
 
-bigint_name : String-> Name
+bigint_name : String -> CairoName
 bigint_name op = makeBuiltinName "\{op}_bigint"
 
 bigint_import : String -> Import
@@ -20,7 +21,7 @@ entry_bit_length : Integer
 entry_bit_length = 125
 
 entry_shift : Integer
-entry_shift = 2 `shiftL` 125
+entry_shift = 1 `shiftL` 125
 
 export
 [add_integer] PrimFn where
@@ -28,6 +29,7 @@ export
     eval [ConstValue (BI 0), _] = Just $ ArgValue 1
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ BI (a+b)
     eval _ = Nothing
+    apStable = False
 
     implicits = singleton range_check_builtin
     imports = fromList [bigint_import "add"]
@@ -38,6 +40,7 @@ export
     eval [_, ConstValue (BI 0)] = Just $ ArgValue 0
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ BI (a-b)
     eval _ = Nothing
+    apStable = False
 
     implicits = singleton range_check_builtin
     imports = fromList [bigint_import "sub"]
@@ -51,6 +54,7 @@ export
     eval [ConstValue (BI 0), _] = Just $ NewValue $ ConstValue $ BI 0
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ BI (a*b)
     eval _ = Nothing
+    apStable = False
 
     implicits = singleton range_check_builtin
     imports = fromList [bigint_import "mul"]
@@ -62,6 +66,7 @@ export
     eval [_, ConstValue (BI 1)] = Just $ ArgValue 0
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ BI (a `div` b)
     eval _ = Nothing
+    apStable = False
 
     implicits = singleton range_check_builtin
     imports = fromList [bigint_import "div"]
@@ -73,6 +78,7 @@ export
     eval [_, ConstValue (BI 0)] = Just $ Failure "Division by zero is not defined"
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ BI (a `mod` b)
     eval _ = Nothing
+    apStable = False
 
     implicits = singleton range_check_builtin
     imports = fromList [bigint_import "mod"]
@@ -91,6 +97,7 @@ export
     eval [_, ConstValue(BI 0)] = Just $ ArgValue 0
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ BI (prim__shl_Integer (cast a) (cast b))
     eval _ = Nothing
+    apStable = False
 
     generateCode _ = generateMissingCodeError "shl_integer" genRuntimeNote
 
@@ -99,6 +106,7 @@ export
     eval [_, ConstValue(BI 0)] = Just $ ArgValue 0
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ BI (prim__shr_Integer (cast a) (cast b))
     eval _ = Nothing
+    apStable = False
 
     generateCode _ = generateMissingCodeError "shr_integer" genRuntimeNote
 
@@ -106,6 +114,7 @@ export
 [and_integer] PrimFn where
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ BI (prim__and_Integer (cast a) (cast b))
     eval _ = Nothing
+    apStable = False
 
     generateCode _ = generateMissingCodeError "and_integer" genRuntimeNote
 
@@ -113,6 +122,7 @@ export
 [or_integer] PrimFn where
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ BI (prim__or_Integer (cast a) (cast b))
     eval _ = Nothing
+    apStable = False
 
     generateCode _ = generateMissingCodeError "or_integer" genRuntimeNote
 
@@ -120,6 +130,7 @@ export
 [xor_integer] PrimFn where
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ BI (prim__xor_Integer (cast a) (cast b))
     eval _ = Nothing
+    apStable = False
 
     generateCode _ = generateMissingCodeError "xor_integer" genRuntimeNote
 
@@ -127,6 +138,7 @@ export
 [lt_integer] PrimFn where
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ toInt (a<b)
     eval _ = Nothing
+    apStable = False
 
     implicits = singleton range_check_builtin
     imports = fromList [bigint_import "lt"]
@@ -136,6 +148,7 @@ export
 [lte_integer] PrimFn where
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ toInt (a<=b)
     eval _ = Nothing
+    apStable = False
 
     implicits = singleton range_check_builtin
     imports = fromList [bigint_import "lte"]
@@ -145,6 +158,7 @@ export
 [eq_integer] PrimFn where
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ toInt (a==b)
     eval _ = Nothing
+    apStable = False
 
     imports = fromList [bigint_import "eq"]
     generateCode _ res args implicits = Instructions [CALL [res] implicits (bigint_name "eq") args]
@@ -153,6 +167,7 @@ export
 [gte_integer] PrimFn where
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ toInt (a>=b)
     eval _ = Nothing
+    apStable = False
 
     implicits = singleton range_check_builtin
     imports = fromList [bigint_import "lte"]
@@ -162,6 +177,7 @@ export
 [gt_integer] PrimFn where
     eval [ConstValue (BI a), ConstValue (BI b)] = Just $ NewValue $ ConstValue $ toInt (a>b)
     eval _ = Nothing
+    apStable = False
 
     implicits = singleton range_check_builtin
     imports = fromList [bigint_import "lt"]
@@ -185,6 +201,7 @@ export
 [cast_signed_to_integer] PrimFn where
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ BI r) (constToInteger c)
     eval _ = Nothing
+    apStable = False
 
     implicits = singleton range_check_builtin
     imports = fromList [bigint_import "from_small_felt"]
@@ -195,18 +212,17 @@ export
 [cast_felt_to_integer] PrimFn where
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ BI r) (constToInteger c)
     eval _ = Nothing
+    apStable = False
 
     implicits = singleton range_check_builtin
     imports = fromList [bigint_import "from_felt"]
     generateCode _ res args implicits = Instructions [CALL [res] implicits (bigint_name "from_felt") args]
 
 generateCast : (target: CairoConst) -> String -> (res:CairoReg) -> (args:List CairoReg) -> LinearImplicitArgs -> PrimFnCode
-generateCast target unique res args implicits = if implicits == empty
-        then Instructions [
-               CALL [tmpReg] empty (bigint_name "signed_lsf") args,
-               OP res empty (Cast FeltType target) [tmpReg]
-             ]
-        else assert_total $ idris_crash "no implicits expected for cast"
+generateCast target unique res args implicits =  Instructions [
+            CALL [tmpReg] empty (bigint_name "signed_lsf") args,
+            OP res implicits (Cast FeltType target) [tmpReg]
+        ]
     where tmpReg : CairoReg
           tmpReg = CustomReg unique Nothing
 export
@@ -214,6 +230,7 @@ export
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ I $ cast r) (constToInteger c)
     eval _ = Nothing
 
+    implicits = singleton range_check_builtin
     imports = fromList [bigint_import "signed_lsf"]
     generateCode = generateCast IntType
 
@@ -223,6 +240,7 @@ export
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ I8 $ cast r) (constToInteger c)
     eval _ = Nothing
 
+    implicits = singleton range_check_builtin
     imports = fromList [bigint_import "signed_lsf"]
     generateCode = generateCast Int8Type
 
@@ -231,6 +249,7 @@ export
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ I16 $ cast r) (constToInteger c)
     eval _ = Nothing
 
+    implicits = singleton range_check_builtin
     imports = fromList [bigint_import "signed_lsf"]
     generateCode = generateCast Int16Type
 
@@ -239,6 +258,7 @@ export
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ I32 $ cast r) (constToInteger c)
     eval _ = Nothing
 
+    implicits = singleton range_check_builtin
     imports = fromList [bigint_import "signed_lsf"]
     generateCode = generateCast Int32Type
 
@@ -247,6 +267,7 @@ export
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ I64 $ cast r) (constToInteger c)
     eval _ = Nothing
 
+    implicits = singleton range_check_builtin
     imports = fromList [bigint_import "signed_lsf"]
     generateCode = generateCast Int64Type
 
@@ -254,6 +275,7 @@ export
 [cast_integer_to_felt] PrimFn where
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ F $ cast r) (constToInteger c)
     eval _ = Nothing
+    apStable = False
 
     imports = fromList [bigint_import "to_felt"]
     generateCode _ res args implicits = Instructions [CALL [res] implicits (bigint_name "to_felt") args]
@@ -263,6 +285,7 @@ export
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ B8 $ cast r) (constToInteger c)
     eval _ = Nothing
 
+    implicits = singleton range_check_builtin
     imports = fromList [bigint_import "signed_lsf"]
     generateCode = generateCast Bits8Type
 
@@ -271,6 +294,7 @@ export
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ B16 $ cast r) (constToInteger c)
     eval _ = Nothing
 
+    implicits = singleton range_check_builtin
     imports = fromList [bigint_import "signed_lsf"]
     generateCode = generateCast Bits16Type
 
@@ -279,6 +303,7 @@ export
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ B32 $ cast r) (constToInteger c)
     eval _ = Nothing
 
+    implicits = singleton range_check_builtin
     imports = fromList [bigint_import "signed_lsf"]
     generateCode = generateCast Bits32Type
 
@@ -287,23 +312,28 @@ export
     eval [ConstValue c] = map (\r => NewValue $ ConstValue $ B64 $ cast r) (constToInteger c)
     eval _ = Nothing
 
+    implicits = singleton range_check_builtin
     imports = fromList [bigint_import "signed_lsf"]
     generateCode = generateCast Bits64Type
 
 public export
 [manifestBigInteger] ConstReg where
     assignConstantReg resReg (BI bi) = """
-      tempvar uncasted_big_int_tmp_ = new(\{ sign }, new(\{ separate ", " splitted }, -1))
-      \{ compileRegDecl resReg } = cast(uncasted_big_int_tmp_,felt)
+      tempvar \{ safeName } = new(\{ sign }, new(\{ separate ", " splitted }))
+      \{ compileRegDecl resReg } = cast(\{ safeName },felt)
     """
     where split : Integer -> List String
           split bi = if bi < entry_shift
-             then (show bi)::Nil
+             then (show bi)::("-1")::Nil
              else (show (bi `mod` entry_shift))::(split (bi `div` entry_shift))
           splitted : List String
           splitted = if bi < 0
             then split ((-1)*bi)
-            else split bi
+            else if bi == 0
+                then ("-1")::Nil
+                else split bi
+          safeName : String
+          safeName = "uncasted_big_int_\{ show $ length splitted }_tmp_"
           sign : String
           sign = if bi < 0 then "-1" else "1"
     assignConstantReg _ c = assert_total $ idris_crash $ "Not a big integer constant: " ++ (show c)

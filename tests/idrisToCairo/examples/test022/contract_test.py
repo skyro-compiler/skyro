@@ -15,6 +15,7 @@ async def test_view():
 
     contract = await starknet.deploy(
         source=CONTRACT_FILE,
+        cairo_path = ["../../../../skyro-runtime"],
         constructor_calldata=[]
     )
  

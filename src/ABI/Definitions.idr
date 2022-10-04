@@ -1,26 +1,22 @@
 module ABI.Definitions
 
-import Core.Context
+import CairoCode.Name
 import Data.List
 import Data.SortedSet
-import Core.Name.Namespace
 import CairoCode.CairoCode
 import CommonDef
 
 public export
 data ABIType : Type where
     PrimType : CairoConst -> ABIType
-    -- BigIntType : ABIType // Just PrimType IntegerType
-    NamedType : Name -> List ABIType -> ABIType
-    Variable : String -> ABIType
+    NamedType : CairoName -> ABIType
     TupleType : List ABIType -> ABIType
     SegmentType : ABIType -- Used for Segments has the form (size : felt, data : felt*)
 
 public export
 Eq ABIType where
     (==) (PrimType cc1) (PrimType cc2) = cc1 == cc2
-    (==) (NamedType n1 ts1) (NamedType n2 ts2) = n1 == n2 && assert_total (ts1 == ts2)
-    (==) (Variable v1) (Variable v2) = v1 == v2
+    (==) (NamedType n1) (NamedType n2) = n1 == n2
     (==) (TupleType ts1) (TupleType ts2) = assert_total (ts1 == ts2)
     (==) SegmentType SegmentType = True
     (==) _ _ = False
@@ -28,24 +24,21 @@ Eq ABIType where
 public export
 Ord ABIType where
     compare (PrimType cc1) (PrimType cc2) = compare cc1 cc2
-    compare (NamedType n1 ts1) (NamedType n2 ts2) = thenCompare (compare n1 n2) (assert_total (compare ts1 ts2))
-    compare (Variable v1) (Variable v2) = compare v1 v2
+    compare (NamedType n1) (NamedType n2) = compare n1 n2
     compare (TupleType ts1) (TupleType ts2) = assert_total (compare ts1 ts2)
     compare SegmentType SegmentType = EQ
     compare at1 at2 = compare (dataOrder at1) (dataOrder at2)
         where dataOrder : ABIType -> Int
               dataOrder (PrimType _) = 0
-              dataOrder (NamedType _ _) = 1
+              dataOrder (NamedType _) = 1
               dataOrder (TupleType _) = 2
-              dataOrder (Variable _ ) = 3
-              dataOrder SegmentType = 4
+              dataOrder SegmentType = 3
 
 
 public export
 Show ABIType where
     show (PrimType c) = "PrimType "++ show c
-    show (NamedType n args) = assert_total ("NamedType "++ show n++"("++show args++")")
-    show (Variable s) = "Variable "++ show s
+    show (NamedType n) = assert_total ("NamedType "++ show n)
     show (TupleType ts) =  assert_total ("TupleType ("++ show ts++")")
     show SegmentType = "SegmentType"
 
@@ -57,59 +50,58 @@ record ABIData where
 
 public export
 data ABIEntry : Type where
-    -- Struct : Name -> List ABIData -> ABIEntry
-    Struct : Name -> List String -> List ABIData -> ABIEntry
-    -- Variant : Name -> List (List ABIData) -> ABIEntry
-    Variant : Name -> List String -> List (List ABIData) -> ABIEntry
-    ExternalFunction : Name -> List ABIData -> Maybe ABIData -> ABIEntry
-    ViewFunction : Name -> List ABIData -> Maybe ABIData -> ABIEntry
-    Constructor : Name -> List ABIData -> ABIEntry
-    -- Event : Name -> List ABIData -> List ABIData -> ABIEntry
-    Event : Name -> ABIEntry
-    L1Handler : Name -> List ABIData -> ABIEntry
-    -- Contract : Name -> List ABIEntry
-    StorageVar : Name -> ABIEntry
-
-topLevelName : Name -> Name
-topLevelName (NS _ innerName) = topLevelName innerName
-topLevelName (MN n _) = UN $ Basic n
-topLevelName n = n
-
--- to help the inliner
-makeMachineName : Name -> Name
-makeMachineName (NS ns innerName) = NS ns (makeMachineName innerName)
-makeMachineName (PV innerName v) = PV (makeMachineName innerName) v
-makeMachineName (Nested idx innerName) = Nested idx (makeMachineName innerName)
-makeMachineName (UN (Basic name)) = MN name 0
-makeMachineName (UN (Field name)) = MN name 0
-makeMachineName (DN str name) = DN str (makeMachineName name)
-makeMachineName name = name
-
-nestName : (Int, Int) -> Name -> Name
-nestName n (NS ns innerName) = NS ns (nestName n innerName)
-nestName n name = Nested n name
+    Struct : CairoName -> List ABIData -> ABIEntry
+    Variant : CairoName -> List (List ABIData) -> ABIEntry
+    -- CustomType : CairoName -> CairoName -> CairoName -> ABIEntry -- First: EntryIdentifier, Second: SerializerName, Third: DeserializerName
+    ExternalFunction : CairoName -> List ABIData -> Maybe ABIData -> ABIEntry
+    ViewFunction : CairoName -> List ABIData -> Maybe ABIData -> ABIEntry
+    Constructor : CairoName -> List ABIData -> ABIEntry
+    AbstractFunction : CairoName -> List ABIData -> Maybe ABIData -> ABIEntry
+    Event : CairoName -> ABIEntry
+    L1Handler : CairoName -> List ABIData -> ABIEntry
+    -- Contract : CairoName -> List ABIEntry
+    StorageVar : CairoName -> ABIEntry
 
 public export
-genEncoderName : Name -> Name
-genEncoderName name = NS (mkNamespace "ABI.Encode") (makeMachineName name)
+entryName : ABIEntry -> CairoName
+entryName (Struct name _) = name
+entryName (Variant name _) = name
+entryName (ExternalFunction name _ _) = name
+entryName (ViewFunction name _ _) = name
+entryName (Constructor name _) = name
+entryName (AbstractFunction name _ _) = name
+entryName (Event name) = name
+entryName (L1Handler name _) = name
+entryName (StorageVar name) = name
 
 public export
-genDecoderName : Name -> Name
-genDecoderName name = NS (mkNamespace "ABI.Decode") (makeMachineName name)
+genEncoderName : CairoName -> CairoName
+genEncoderName name = extendNamePlain "encoder" (extendNamePlain "generated" name)
 
 public export
-genCtrEncoderName : Int -> Name -> Name
-genCtrEncoderName tag name = NS (mkNamespace "ABI.Encode") (makeMachineName (nestName (tag,0) name))
+genDecoderName : CairoName -> CairoName
+genDecoderName name = extendNamePlain "decoder" (extendNamePlain "generated" name)
 
 public export
-genCtrDecoderName : Int -> Name -> Name
-genCtrDecoderName tag name = NS (mkNamespace "ABI.Decode") (makeMachineName (nestName (tag,0) name))
+genCtrEncoderName : Int -> CairoName -> CairoName
+genCtrEncoderName tag name = extendName "encoder" tag (extendNamePlain "generated" name)
 
 public export
-genEntryName : Name -> String -> Name
-genEntryName (NS _ n) kind = topLevelName n
-genEntryName n kind = topLevelName n
+genCtrDecoderName : Int -> CairoName -> CairoName
+genCtrDecoderName tag name = extendName "decoder" tag (extendNamePlain "generated" name)
 
 public export
-constructorName : Name
-constructorName = UN $ Basic ("constructor")
+genAbstractFunctionResultDecoderName : CairoName -> CairoName
+genAbstractFunctionResultDecoderName name = extendNamePlain "resultdecoder" (extendNamePlain "generated" name)
+
+public export
+genAbstractFunctionParamEncoderName : CairoName -> CairoName
+genAbstractFunctionParamEncoderName name = extendNamePlain "paramencoder" (extendNamePlain "generated" name)
+
+public export
+genEntryName : CairoName -> String -> CairoName
+genEntryName n _ = externalName $ extractName n
+
+public export
+constructorName : CairoName
+constructorName = externalName "constructor"

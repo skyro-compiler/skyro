@@ -1,44 +1,55 @@
 module ABI.Generator
 
 import ABI.Definitions
-import Core.Context
+import CairoCode.Name
 import Data.List
 import Data.SortedSet
 import Data.SortedMap
-import Core.Name.Namespace
 
 import CommonDef
 import CairoCode.CairoCode
 import CairoCode.CairoCodeUtils
-import ABI.Specializer
 
 import Debug.Trace
 
 -- Todo: do the newtype and enum optimisation before this code otherwise it is idris specific
+-- Todo: alt - we can have it turn on and off over a parameter
 
-readExternal : Name
-readExternal = NS (mkNamespace "ABI.Helper") (UN $ Basic "cairoreadptr")
+readExternal : CairoName
+readExternal = Extension "external" Nothing (fullName ["ABI", "Helper"] "cairoreadptr")
 
-writeExternal : Name
-writeExternal = NS (mkNamespace "ABI.Helper") (UN $ Basic "cairowriteptr")
+writeExternal : CairoName
+writeExternal = Extension "external" Nothing (fullName ["ABI", "Helper"] "cairowriteptr")
 
-readTag : Name
-readTag = NS (mkNamespace "ABI.Helper") (UN $ Basic "readtag")
+readTag : CairoName
+readTag = Extension "external" Nothing (fullName ["ABI", "Helper"] "readtag")
 
-makeTagless : Name
-makeTagless = NS (mkNamespace "ABI.Helper") (UN $ Basic "maketagless")
+makeTagless : CairoName
+makeTagless = Extension "external" Nothing (fullName ["ABI", "Helper"] "maketagless")
 
-tagBoundCheck : Name
-tagBoundCheck = NS (mkNamespace "ABI.Helper") (UN $ Basic "boundedtag")
+tagBoundCheck : CairoName
+tagBoundCheck = Extension "external" Nothing (fullName ["ABI", "Helper"] "boundedtag")
 
-memCopy : Name
-memCopy = NS (mkNamespace "ABI.Helper") (UN $ Basic "cairomemcopy")
+memCopy : CairoName
+memCopy = Extension "external" Nothing (fullName ["ABI", "Helper"] "cairomemcopy")
 
-segmentExternal : Name
-segmentExternal = NS (mkNamespace "ABI.Helper") (UN $ Basic "cairocreateptr")
+bigintLen : CairoName
+bigintLen = Extension "external" Nothing (fullName ["ABI", "Helper"] "bigintlength")
 
-capturePtrExternal : Name
-capturePtrExternal = NS (mkNamespace "ABI.Helper") (UN $ Basic "cairocaptureptr")
+bigintSign : CairoName
+bigintSign = Extension "external" Nothing (fullName ["ABI", "Helper"] "bigintsign")
+
+segmentExternal : CairoName
+segmentExternal = Extension "external" Nothing (fullName ["ABI", "Helper"] "cairocreateptr")
+
+capturePtrExternal : CairoName
+capturePtrExternal = Extension "external" Nothing (fullName ["ABI", "Helper"] "cairocaptureptr")
+
+arrayEncoder : CairoName
+arrayEncoder = extendNamePlain "encoder" (extendNamePlain "generated" (fullName ["ABI", "Helper"] "writeMany"))
+
+arrayDecoder : CairoName
+arrayDecoder = extendNamePlain "encoder" (extendNamePlain "generated" (fullName ["ABI", "Helper"] "readMany"))
 
 writeSegment : CairoReg -> CairoReg -> CairoReg -> List CairoInst
 writeSegment ptrAfter ptrBefore value = [
@@ -53,6 +64,27 @@ writeSegment ptrAfter ptrBefore value = [
           memPtr = prefixedReg ("ptr_mem_") value
           lengthReg : CairoReg
           lengthReg = prefixedReg ("len_") value
+
+writeBigInt : CairoReg -> CairoReg -> CairoReg -> List CairoInst
+writeBigInt ptrAfter ptrBefore value = [
+            EXTPRIM [signReg] empty readTag [value],
+            EXTPRIM [ptrAfterSign] empty writeExternal [ptrBefore, signReg],
+            EXTPRIM [lenReg] empty bigintLen [value],
+            EXTPRIM [ptrAfterLen] empty writeExternal [ptrAfterSign, lenReg],
+            PROJECT bigPtr value 0,
+            EXTPRIM [ptrAfter] empty memCopy [bigPtr, ptrAfterLen, lenReg]
+        ]
+    where signReg : CairoReg
+          signReg = prefixedReg ("sign_") value
+          lenReg : CairoReg
+          lenReg = prefixedReg ("len_") value
+          bigPtr : CairoReg
+          bigPtr = prefixedReg ("big_") value
+          ptrAfterSign : CairoReg
+          ptrAfterSign = prefixedReg ("sign_") ptrAfter
+          ptrAfterLen : CairoReg
+          ptrAfterLen = prefixedReg ("len_") ptrAfter
+
 mutual
     writeComposite : CairoReg -> CairoReg -> CairoReg -> List ABIType -> List CairoInst
     writeComposite ptrAfter ptrBefore value fields =
@@ -66,23 +98,23 @@ mutual
               extractField inPtr outPtr typ pos = (PROJECT (fieldReg pos) value pos)::(writeValue outPtr inPtr (fieldReg pos) typ)
 
     writeValue : CairoReg -> CairoReg -> CairoReg -> ABIType -> List CairoInst
-    writeValue ptrAfter ptrBefore value (NamedType name _) = [CALL [ptrAfter] empty (genEncoderName name) [ptrBefore, value]]
+    writeValue ptrAfter ptrBefore value (NamedType name) = [CALL [ptrAfter] empty (genEncoderName name) [ptrBefore, value]]
     writeValue ptrAfter ptrBefore value SegmentType = writeSegment ptrAfter ptrBefore value
-    writeValue ptrAfter ptrBefore value (Variable name) = assert_total $ idris_crash "Spezialiser Should have removed this case"
     -- Idris has a newtype optimisation omits the wrapper
     writeValue ptrAfter ptrBefore value (TupleType [field]) = writeValue ptrAfter ptrBefore value field
     writeValue ptrAfter ptrBefore value (TupleType fields) = writeComposite ptrAfter ptrBefore value fields
+    writeValue ptrAfter ptrBefore value (PrimType IntegerType) = writeBigInt ptrAfter ptrBefore value
     writeValue ptrAfter ptrBefore value (PrimType typ) = [OP castReg empty (Cast typ FeltType) [value], EXTPRIM [ptrAfter] empty writeExternal [ptrBefore, castReg]]
         where castReg : CairoReg
               castReg = prefixedReg "casted" value
 
-genVariantEncoder : Name -> List (List ABIData) -> List (Name, CairoDef)
+genVariantEncoder : CairoName -> List (List ABIData) -> List (CairoName, CairoDef)
 genVariantEncoder name ctrs = (genEncoderName name, FunDef [CustomReg "retdata" Nothing, Param 0] empty [CustomReg "ptr" Nothing] body)::ctrDefs
     where ctrBody : Int -> List ABIData -> List CairoInst
           ctrBody t fields = (EXTPRIM [Unassigned Nothing 0 0] empty writeExternal [CustomReg "retdata" Nothing, Const (I t)])::(writeComposite (Unassigned Nothing 1 0) (Unassigned Nothing 0 0) (Param 0) (map type fields)) ++ [RETURN [Unassigned Nothing 1 0] empty]
           ctrDef : Int -> List ABIData -> CairoDef
           ctrDef t fields = FunDef [CustomReg "retdata" Nothing, Param 0] empty [CustomReg "ptr" Nothing] (ctrBody t fields)
-          ctrDefs : List (Name, CairoDef)
+          ctrDefs : List (CairoName, CairoDef)
           ctrDefs = snd $ foldl (\(t,acc),fields => (t+1, acc ++ [(genCtrEncoderName t name, ctrDef t fields)])) (0, empty) ctrs
           ctrCalls : List (Int, List CairoInst)
           ctrCalls = snd $ foldl (\(t,acc), _ => (t+1, acc ++ [(t, [CALL [Unassigned Nothing 0 0] empty (genCtrEncoderName t name) [CustomReg "retdata" Nothing, Param 0]])])) (0, empty) ctrs
@@ -93,7 +125,7 @@ genVariantEncoder name ctrs = (genEncoderName name, FunDef [CustomReg "retdata" 
 -- Todo: shall we check it is in range?
 --       in current compiler no problem as the last if in a case cascade is a catch all
 --       however if passed in and out then a return processor could be surprised
-genEnumEncoder : Name -> List (Name, CairoDef)
+genEnumEncoder : CairoName -> List (CairoName, CairoDef)
 genEnumEncoder name = [(genEncoderName name, FunDef [CustomReg "retdata" Nothing, Param 0] empty [CustomReg "ptr" Nothing] body)]
     where body : List CairoInst
           body = writeValue (Unassigned Nothing 0 0) (CustomReg "retdata" Nothing) (Param 0) (PrimType IntType) ++ [RETURN [Unassigned Nothing 0 0] empty]
@@ -103,16 +135,14 @@ genEnumEncoder name = [(genEncoderName name, FunDef [CustomReg "retdata" Nothing
 --       just a wrapper that: let ptr = alloc() in let _ = encode ptr input in ptr (but dead code elim save)
 -- Signature : (Felt*, Any) -> Felt*
 --              Start, Input -> End
-genEncoderDef : ABIEntry -> List (Name, CairoDef)
-genEncoderDef (Struct name [] fields) = [(genEncoderName name, FunDef [CustomReg "retdata" Nothing, Param 0] empty [CustomReg "ptr" Nothing] body)]
+genEncoderDef : ABIEntry -> List (CairoName, CairoDef)
+genEncoderDef (Struct name fields) = [(genEncoderName name, FunDef [CustomReg "retdata" Nothing, Param 0] empty [CustomReg "ptr" Nothing] body)]
     where body : List CairoInst
           body = writeValue (Unassigned Nothing 0 0) (CustomReg "retdata" Nothing) (Param 0) (TupleType (map type fields)) ++ [RETURN [Unassigned Nothing 0 0] empty]
 -- Idris has an enum optimisation (makes it an Int)
-genEncoderDef (Variant name [] ctrs) = if all isNil ctrs
+genEncoderDef (Variant name ctrs) = if all isNil ctrs
     then genEnumEncoder name
     else genVariantEncoder name ctrs
-genEncoderDef (Struct _ _ _) = assert_total $ idris_crash "Type arguments should have been removed by spezialiser"
-genEncoderDef (Variant _ _ _) = assert_total $ idris_crash "Type arguments should have been removed by spezialiser"
 genEncoderDef _ = assert_total $ idris_crash "Encoder is only supported for structs and variants"
 
 readSegment : CairoReg -> CairoReg -> CairoReg -> List CairoInst
@@ -125,6 +155,36 @@ readSegment ptrAfter ptrBefore value = [
           memReg = prefixedReg ("mem_") value
           lengthReg : CairoReg
           lengthReg = prefixedReg ("len_") value
+
+readBigInt : CairoReg -> CairoReg -> CairoReg -> List CairoInst
+readBigInt ptrAfter ptrBefore value = [
+            EXTPRIM [ptrAfterSign, signReg] empty readExternal [ptrBefore],
+            -- Todo: check sign is valid
+            EXTPRIM [ptrAfterLen, lenReg] empty readExternal [ptrAfterSign],
+            EXTPRIM [segPtr] empty segmentExternal [],
+            EXTPRIM [newSegPtr] empty memCopy [ptrAfterLen, segPtr, lenReg],
+            EXTPRIM [finSegPtr] empty writeExternal [newSegPtr, Const (F (-1))],
+            OP ptrAfter empty (Add FeltType) [ptrAfterLen, lenReg],
+            EXTPRIM [bigPtr] empty capturePtrExternal [finSegPtr, segPtr], -- ensures the two writes are not eliminated
+            EXTPRIM [value] empty makeTagless [signReg,bigPtr]
+        ]
+    where ptrAfterSign : CairoReg
+          ptrAfterSign = prefixedReg ("sign_") ptrAfter
+          ptrAfterLen : CairoReg
+          ptrAfterLen = prefixedReg ("len_") ptrAfter
+          signReg : CairoReg
+          signReg = prefixedReg ("sign_") value
+          lenReg : CairoReg
+          lenReg = prefixedReg ("len_") value
+          segPtr : CairoReg
+          segPtr = prefixedReg ("seg_") value
+          bigPtr : CairoReg
+          bigPtr = prefixedReg ("big_") value
+          newSegPtr : CairoReg
+          newSegPtr = prefixedReg ("new_") segPtr
+          finSegPtr : CairoReg
+          finSegPtr = prefixedReg ("fin_") segPtr
+
 mutual
     readComposite : CairoReg -> CairoReg -> CairoReg -> Maybe Int -> List ABIType -> List CairoInst
     readComposite ptrAfter ptrBefore value tag fields =
@@ -136,17 +196,17 @@ mutual
               readField (ptrReg, (vRegs,code)) typ = let (aReg, vReg) = genRegs (length vRegs) in (aReg, (vRegs ++ [vReg], code ++ (readValue aReg ptrReg vReg typ)))
 
     readValue : CairoReg -> CairoReg -> CairoReg -> ABIType -> List CairoInst
-    readValue ptrAfter ptrBefore value (NamedType name _ ) = [CALL [ptrAfter, value] empty (genDecoderName name) [ptrBefore]]
+    readValue ptrAfter ptrBefore value (NamedType name) = [CALL [ptrAfter, value] empty (genDecoderName name) [ptrBefore]]
     readValue ptrAfter ptrBefore value SegmentType = readSegment ptrAfter ptrBefore value
-    readValue ptrAfter ptrBefore value (Variable name) = assert_total $ idris_crash "Spezialiser Should have removed this case"
-    -- Idris has a newtype optimisation omits the wrapper
+    -- Idris has a newtype optimisation omits the wrapper -- Todo: move into idris have an ApplyIdrisOptimizer pass
     readValue ptrAfter ptrBefore value (TupleType [field]) = readValue ptrAfter ptrBefore value field
     readValue ptrAfter ptrBefore value (TupleType fields) = readComposite ptrAfter ptrBefore value Nothing fields
+    readValue ptrAfter ptrBefore value (PrimType IntegerType) = readBigInt ptrAfter ptrBefore value
     readValue ptrAfter ptrBefore value (PrimType typ) = [EXTPRIM [ptrAfter, rawReg] empty readExternal [ptrBefore], OP value empty (Cast FeltType typ) [rawReg]]
         where rawReg : CairoReg
               rawReg = prefixedReg "raw" value
 
-genVariantDecoder : Name -> List (List ABIData) -> List (Name, CairoDef)
+genVariantDecoder : CairoName -> List (List ABIData) -> List (CairoName, CairoDef)
 genVariantDecoder name ctrs = (genDecoderName name, FunDef [CustomReg "calldata" Nothing] empty [CustomReg "ptr" Nothing, CustomReg "value" Nothing] body)::ctrDefs
     where ptrAfterValueReg : CairoReg
           ptrAfterValueReg  = Unassigned Nothing 0 0
@@ -160,7 +220,7 @@ genVariantDecoder name ctrs = (genDecoderName name, FunDef [CustomReg "calldata"
           ctrBody t fields = (readComposite ptrAfterValueReg (CustomReg "calldata" Nothing) valueReg (Just t) (map type fields)) ++ [RETURN [ptrAfterValueReg, valueReg] empty]
           ctrDef : Int -> List ABIData -> CairoDef
           ctrDef t fields = FunDef [CustomReg "calldata" Nothing] empty [CustomReg "ptr" Nothing, CustomReg "value" Nothing] (ctrBody t fields)
-          ctrDefs : List (Name, CairoDef)
+          ctrDefs : List (CairoName, CairoDef)
           ctrDefs = snd $ foldl (\(t,acc),fields => (t+1, acc ++ [(genCtrDecoderName t name, ctrDef t fields)])) (0, empty) ctrs
           ctrCalls : List (CairoConst, List CairoInst)
           ctrCalls = snd $ foldl (\(t,acc), _ => (t+1, acc ++ [(I t, [CALL [ptrAfterValueReg, valueReg] empty (genCtrDecoderName t name) [ptrAfterTagReg]])])) (0, empty) ctrs
@@ -172,7 +232,7 @@ genVariantDecoder name ctrs = (genDecoderName name, FunDef [CustomReg "calldata"
 -- Idris has an enum optimisation (makes it an Int)
 -- Todo: check that it is in range or error
 --       in current compiler no problem as the last if in a case cascade is a catch all
-genEnumDecoder : Name -> Nat -> List (Name, CairoDef)
+genEnumDecoder : CairoName -> Nat -> List (CairoName, CairoDef)
 genEnumDecoder name numCtr = [(genDecoderName name, FunDef [CustomReg "calldata" Nothing] empty [CustomReg "ptr" Nothing, CustomReg "value" Nothing] body)]
     where body : List CairoInst
           body = readValue (Unassigned Nothing 0 0) (CustomReg "calldata" Nothing) (Unassigned Nothing 1 0) (PrimType FeltType) ++  [
@@ -182,21 +242,18 @@ genEnumDecoder name numCtr = [(genDecoderName name, FunDef [CustomReg "calldata"
 
 -- Signature : Felt* -> (Felt*, Any)
 --             Start -> End, Output
-genDecoderDef : ABIEntry -> List (Name, CairoDef)
-genDecoderDef (Struct name [] fields) = [(genDecoderName name, FunDef [CustomReg "calldata" Nothing] empty [CustomReg "ptr" Nothing, CustomReg "value" Nothing] body)]
+genDecoderDef : ABIEntry -> List (CairoName, CairoDef)
+genDecoderDef (Struct name fields) = [(genDecoderName name, FunDef [CustomReg "calldata" Nothing] empty [CustomReg "ptr" Nothing, CustomReg "value" Nothing] body)]
    where body : List CairoInst
          body = readValue (Unassigned Nothing 0 0) (CustomReg "calldata" Nothing) (Unassigned Nothing 1 0) (TupleType (map type fields)) ++ [RETURN [Unassigned Nothing 0 0, Unassigned Nothing 1 0] empty]
 -- Idris has an enum optimisation
-genDecoderDef (Variant name [] ctrs) = if all isNil ctrs
+genDecoderDef (Variant name ctrs) = if all isNil ctrs
     then genEnumDecoder name (length ctrs)
     else genVariantDecoder name ctrs
-
-genDecoderDef (Struct _ _ _) = assert_total $ idris_crash "Type arguments should have been removed by spezialiser"
-genDecoderDef (Variant _ _ _) = assert_total $ idris_crash "Type arguments should have been removed by spezialiser"
 genDecoderDef _ = assert_total $ idris_crash "Decoder is only supported for structs"
 
 
-genEntryPointBody : (ABIType -> Maybe Int) -> Name -> List ABIData -> Maybe ABIData -> List CairoInst
+genEntryPointBody : (ABIType -> Maybe Int) -> CairoName -> List ABIData -> Maybe ABIData -> List CairoInst
 genEntryPointBody sizeF target params return = deserializationCode ++ callCode ++ serializationCode ++ retCode
     where deserializeRegs: List (CairoReg, CairoReg)
           deserializeRegs = snd $ foldl (\(cnt, acc), _ => (cnt+1,(Unassigned (Just "param") cnt 0, Unassigned (Just "param_ptr") cnt 0)::acc)) (0, []) params
@@ -239,44 +296,43 @@ genEntryPointBody sizeF target params return = deserializationCode ++ callCode +
 sysPtrBuiltin : SortedMap LinearImplicit CairoReg
 sysPtrBuiltin = singleton syscall_builtin (implicitReg syscall_builtin)
 
-genEntryPoint : (ABIType -> Maybe Int) -> ABIEntry -> (Name, CairoDef)
+genEntryPoint : (ABIType -> Maybe Int) -> ABIEntry -> (CairoName, CairoDef)
 genEntryPoint sizeF (StorageVar name) = (name, ExtFunDef ["@storage_var"] [] empty [CustomReg "res" (Just "felt")] [])
 genEntryPoint sizeF (Event name) = (name, ExtFunDef ["@event"] [] empty [] [])
 genEntryPoint sizeF (ExternalFunction name args rets) = (genEntryName name "Function", ExtFunDef ["@external", "@raw_input", "@raw_output"] [CustomReg "selector" (Just "felt"), CustomReg "calldata_size" (Just "felt"), CustomReg "calldata" (Just "felt*")] sysPtrBuiltin [CustomReg "retdata_size" (Just "felt"), CustomReg "retdata" (Just "felt*")] (genEntryPointBody sizeF name args rets))
 genEntryPoint sizeF (ViewFunction name args rets) = (genEntryName name "Function", ExtFunDef ["@view", "@raw_input", "@raw_output"] [CustomReg "selector" (Just "felt"), CustomReg "calldata_size" (Just "felt"), CustomReg "calldata" (Just "felt*")] sysPtrBuiltin [CustomReg "retdata_size" (Just "felt"), CustomReg "retdata" (Just "felt*")] (genEntryPointBody sizeF name args rets))
 genEntryPoint sizeF (Constructor name args) = (constructorName, ExtFunDef ["@constructor", "@raw_input"] [CustomReg "selector" (Just "felt"), CustomReg "calldata_size" (Just "felt"), CustomReg "calldata" (Just "felt*")] sysPtrBuiltin [] (genEntryPointBody sizeF name args Nothing))
+genEntryPoint sizeF (AbstractFunction name args rets) = (name, ExtFunDef ["@contract_interface"] [] empty [] [])
 genEntryPoint sizeF (L1Handler name args) = (genEntryName name "L1Handler", ExtFunDef ["@l1_handler", "@raw_input"] [CustomReg "selector" (Just "felt"), CustomReg "calldata_size" (Just "felt"), CustomReg "calldata" (Just "felt*")] sysPtrBuiltin [] (genEntryPointBody sizeF name args Nothing))
 genEntryPoint _ _ = assert_total $ idris_crash "Entry point is only supported for functions"
 
 
-indexedTopLevelTypes : List ABIEntry -> SortedMap Name ABIEntry
+indexedTopLevelTypes : List ABIEntry -> SortedMap CairoName ABIEntry
 indexedTopLevelTypes [] = empty
-indexedTopLevelTypes (e@(Struct name _ _)::xs) = insert name e (indexedTopLevelTypes xs)
-indexedTopLevelTypes (e@(Variant name _ _)::xs) = insert name e (indexedTopLevelTypes xs)
+indexedTopLevelTypes (e@(Struct name _)::xs) = insert name e (indexedTopLevelTypes xs)
+indexedTopLevelTypes (e@(Variant name _)::xs) = insert name e (indexedTopLevelTypes xs)
 indexedTopLevelTypes (_::xs) = indexedTopLevelTypes xs
 
 maybeAdd : Maybe Int -> Maybe Int -> Maybe Int
 maybeAdd (Just s1) (Just s2) = Just (s1+s2)
 maybeAdd _ _ = Nothing
 
-sizeMap : SortedMap Name ABIEntry -> SortedMap Name (Maybe Int)
+sizeMap : SortedMap CairoName ABIEntry -> SortedMap CairoName (Maybe Int)
 sizeMap indexedEntries = foldl (\res, abi => snd $ sizeMapRec abi res) empty (values indexedEntries)
     where mutual
-              typSizeRec : ABIType -> SortedMap Name (Maybe Int) -> (Maybe Int, SortedMap Name (Maybe Int))
+              typSizeRec : ABIType -> SortedMap CairoName (Maybe Int) -> (Maybe Int, SortedMap CairoName (Maybe Int))
               typSizeRec (PrimType IntegerType) processed = (Nothing, processed)
               typSizeRec (PrimType StringType) processed = (Nothing, processed)
               typSizeRec (PrimType _) processed = (Just 1, processed)
               typSizeRec SegmentType processed = (Nothing, processed)
-              typSizeRec (Variable _) _ = assert_total $ idris_crash "Should have been eliminated by type spezialiser"
               typSizeRec (TupleType fields) processed = foldr (\t,(acc,p) => let (r,p2) = typSizeRec t p in (maybeAdd acc r,p2)) (Just 0, processed) fields
-              typSizeRec (NamedType name []) processed = case lookup name indexedEntries of
+              typSizeRec (NamedType name) processed = case lookup name indexedEntries of
                 Nothing => (Nothing, processed)
                 (Just e) => sizeMapRec e processed
-              typSizeRec (NamedType _ _) _ = assert_total $ idris_crash "Should have been eliminated by type spezialiser"
 
-              sizeMapRec : ABIEntry -> SortedMap Name (Maybe Int) -> (Maybe Int, SortedMap Name (Maybe Int))
+              sizeMapRec : ABIEntry -> SortedMap CairoName (Maybe Int) -> (Maybe Int, SortedMap CairoName (Maybe Int))
               --       intermediary if all have zero args <-- for enums
-              sizeMapRec (Variant name _ ctrs) processed =  case lookup name processed of
+              sizeMapRec (Variant name ctrs) processed =  case lookup name processed of
                 -- Add Nothing first to terminate recursion of infinite variants
                 Nothing => let recGuardedProcessed = insert name Nothing processed in
                            let (r,p) = if all isNil ctrs -- Todo: extend to all ctrs have same size
@@ -285,7 +341,7 @@ sizeMap indexedEntries = foldl (\res, abi => snd $ sizeMapRec abi res) empty (va
                            -- insert real value
                            in (r, insert name r p)
                 (Just r) => (r, processed)
-              sizeMapRec (Struct name [] fields) processed = case lookup name processed of
+              sizeMapRec (Struct name fields) processed = case lookup name processed of
                 -- Add Nothing first to terminate recursion of infinite records
                 Nothing => let recGuardedProcessed = insert name Nothing processed in
                            let (r,p) = typSizeRec (TupleType (map type fields)) recGuardedProcessed in
@@ -294,27 +350,84 @@ sizeMap indexedEntries = foldl (\res, abi => snd $ sizeMapRec abi res) empty (va
                 (Just r) => (r, processed)
               sizeMapRec _ processed = (Nothing, processed)
 
-getSize : SortedMap Name (Maybe Int) -> ABIType -> Maybe Int
+getSize : SortedMap CairoName (Maybe Int) -> ABIType -> Maybe Int
 getSize _ (PrimType IntegerType) = Nothing
 getSize _ (PrimType StringType) = Nothing
 getSize _ (PrimType _) = Just 1
 getSize _ SegmentType = Nothing
-getSize _ (Variable _) = assert_total $ idris_crash "Should have been eliminated by type spezialiser"
 getSize sizeMapping (TupleType fields) = foldl maybeAdd (Just 0) (map (getSize sizeMapping) fields)
-getSize sizeMapping (NamedType name _) = case lookup name sizeMapping of
+getSize sizeMapping (NamedType name) = case lookup name sizeMapping of
     Nothing => Nothing
     (Just res) => res
 
-generateAbiFunction : (ABIType -> Maybe Int) -> ABIEntry -> List (Name, CairoDef)
-generateAbiFunction _ abi@(Struct _ _ _) = (genEncoderDef abi) ++ (genDecoderDef abi)
-generateAbiFunction _ abi@(Variant _ _ _) = (genEncoderDef abi) ++ (genDecoderDef abi)
+generateSegmentEncoder : List ABIType -> CairoDef
+generateSegmentEncoder typs = FunDef params empty [CustomReg "val" Nothing] body
+    where params : List CairoReg
+          params = reverse $ snd $ foldl (\(n,ps),_ => (n+1, (Param n)::ps)) (0, Nil) typs
+          beforePtr : CairoReg
+          beforePtr = Unassigned Nothing 0 0
+          segLenReg : CairoReg
+          segLenReg = Unassigned Nothing 1 0
+          segReg : CairoReg
+          segReg = Unassigned Nothing 2 0
+          updatedPtrs : List CairoReg
+          updatedPtrs = reverse $ snd $ foldl (\(n,ps),_ => (n+1, (Unassigned Nothing n 0)::ps)) (3, Nil) typs
+          write : (CairoReg, List CairoInst) -> (ABIType, (CairoReg, CairoReg)) -> (CairoReg, List CairoInst)
+          write (activePtr, acc) (typ, (paramPtr, resPtr)) = (resPtr, acc ++ writeValue resPtr activePtr paramPtr typ)
+          writes : (CairoReg, List CairoInst)
+          writes = foldl write (beforePtr, Nil) (zip typs (zip params updatedPtrs))
+          body : List CairoInst
+          body = let (afterPtr, allWrites) = writes in (EXTPRIM [beforePtr] empty segmentExternal [])::allWrites ++ [
+             OP segLenReg empty (Sub FeltType) [afterPtr, beforePtr],
+             EXTPRIM [segReg] empty makeTagless [segLenReg, beforePtr],
+             RETURN [segReg] empty
+          ]
+
+generateSegmentDecoder : ABIType -> CairoDef
+generateSegmentDecoder typ = FunDef [Param 0] empty [CustomReg "val" Nothing] body
+    where memReg : CairoReg
+          memReg = Unassigned Nothing 0 0
+          valReg : CairoReg
+          valReg = Unassigned Nothing 1 0
+          afterPtr : CairoReg
+          afterPtr = Unassigned Nothing 2 0
+          decLenReg : CairoReg
+          decLenReg = Unassigned Nothing 3 0
+          segLenReg : CairoReg
+          segLenReg = Unassigned Nothing 4 0
+          lenDiffReg : CairoReg
+          lenDiffReg = Unassigned Nothing 5 0
+          errorReg : CairoReg
+          errorReg = Unassigned Nothing 6 1
+          error : List CairoInst
+          error = [ERROR errorReg "Decoding Error", RETURN [errorReg] empty]
+          success : List CairoInst
+          success = [RETURN [valReg] empty]
+          body : List CairoInst
+          body = (PROJECT memReg (Param 0) 0)::(readValue afterPtr memReg valReg typ) ++ [
+            OP decLenReg empty (Sub FeltType) [afterPtr, memReg],
+            EXTPRIM [segLenReg] empty readTag [Param 0],
+            OP lenDiffReg empty (Sub FeltType) [segLenReg, decLenReg],
+            CASE lenDiffReg [(0, success)] (Just error)
+          ]
+
+generateSegmentCodecs : CairoName -> List ABIData -> Maybe ABIData -> List (CairoName, CairoDef)
+generateSegmentCodecs name args (Just ret) = [
+    (genAbstractFunctionParamEncoderName name, generateSegmentEncoder (map type args)),
+    (genAbstractFunctionResultDecoderName name, generateSegmentDecoder (type ret))
+]
+generateSegmentCodecs name args Nothing = (genAbstractFunctionParamEncoderName name,generateSegmentEncoder (map type args))::Nil
+
+generateAbiFunction : (ABIType -> Maybe Int) -> ABIEntry -> List (CairoName, CairoDef)
+generateAbiFunction _ abi@(Struct _ _) = (genEncoderDef abi) ++ (genDecoderDef abi)
+generateAbiFunction _ abi@(Variant _ _) = (genEncoderDef abi) ++ (genDecoderDef abi)
+generateAbiFunction sizeF abi@(AbstractFunction name args rets) = (genEntryPoint sizeF abi)::(generateSegmentCodecs name args rets)
 generateAbiFunction sizeF abi = [genEntryPoint sizeF abi]
 
-generateSpecialisedAbiFunctions : List ABIEntry -> List (Name, CairoDef)
-generateSpecialisedAbiFunctions entries = foldl (\acc, e => (generateAbiFunction sizeF e) ++ acc) [] entries
+public export
+generateAbiFunctions : List ABIEntry -> List (CairoName, CairoDef)
+generateAbiFunctions entries = foldl (\acc, e => (generateAbiFunction sizeF e) ++ acc) [] entries
     where sizeF : ABIType -> Maybe Int
           sizeF = getSize (sizeMap (indexedTopLevelTypes entries))
 
-public export
-generateAbiFunctions : List ABIEntry -> List (Name, CairoDef)
-generateAbiFunctions entries = generateSpecialisedAbiFunctions (spezializeEntries entries)
+

@@ -2,7 +2,8 @@
 module Primitives.UInt
 
 import Primitives.Common
-import Core.Context
+-- import Core.Context
+import CairoCode.Name
 import CairoCode.CairoCode
 import Data.SortedSet
 import Data.SortedMap
@@ -12,7 +13,7 @@ import CodeGen.CodeGenHelper
 ---------------------------------------------------------------------------------------------------
 -- UINT General
 ---------------------------------------------------------------------------------------------------
-uintX_name : String-> Nat -> Name
+uintX_name : String-> Nat -> CairoName
 uintX_name op nBits = makeBuiltinName "\{op}_uint\{show nBits}"
 
 uintX_import : String -> Nat -> Import
@@ -21,7 +22,7 @@ uintX_import op nBits = MkImport "skyro.uint\{show nBits}" "uint_\{op}" (Just "\
 ---------------------------------------------------------------------------------------------------
 -- UINT ADD
 ---------------------------------------------------------------------------------------------------
-add_uintX_name : Nat -> Name
+add_uintX_name : Nat -> CairoName
 add_uintX_name = uintX_name "add"
 
 add_uintX_import : Nat -> Import
@@ -74,7 +75,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT SUB
 ---------------------------------------------------------------------------------------------------
-sub_uintX_name : Nat -> Name
+sub_uintX_name : Nat -> CairoName
 sub_uintX_name = uintX_name "sub"
 
 sub_uintX_import : Nat -> Import
@@ -124,7 +125,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT MUL
 ---------------------------------------------------------------------------------------------------
-mul_uintX_name : Nat -> Name
+mul_uintX_name : Nat -> CairoName
 mul_uintX_name = uintX_name "mul"
 
 mul_uintX_import : Nat -> Import
@@ -187,7 +188,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT DIV
 ---------------------------------------------------------------------------------------------------
-div_uintX_name : Nat -> Name
+div_uintX_name : Nat -> CairoName
 div_uintX_name = uintX_name "div"
 
 div_uintX_import : Nat -> Import
@@ -242,7 +243,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT MOD
 ---------------------------------------------------------------------------------------------------
-mod_uintX_name : Nat -> Name
+mod_uintX_name : Nat -> CairoName
 mod_uintX_name = uintX_name "mod"
 
 mod_uintX_import : Nat -> Import
@@ -296,7 +297,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT NEG:
 ---------------------------------------------------------------------------------------------------
-neg_uintX_name : Nat -> Name
+neg_uintX_name : Nat -> CairoName
 neg_uintX_name = uintX_name "neg"
 
 neg_uintX_import : Nat -> Import
@@ -342,7 +343,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT SHL
 ---------------------------------------------------------------------------------------------------
-shl_uintX_name : Nat -> Name
+shl_uintX_name : Nat -> CairoName
 shl_uintX_name = uintX_name "shl"
 
 shl_uintX_import : Nat -> Import
@@ -400,7 +401,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT SHR
 ---------------------------------------------------------------------------------------------------
-shr_uintX_name : Nat -> Name
+shr_uintX_name : Nat -> CairoName
 shr_uintX_name = uintX_name "shr"
 
 shr_uintX_import : Nat -> Import
@@ -667,7 +668,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT LT
 ---------------------------------------------------------------------------------------------------
-lt_uintX_name : Name
+lt_uintX_name : CairoName
 lt_uintX_name = makeBuiltinName "lt_uint"
 
 lt_uintX_import : Import
@@ -712,7 +713,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT LTE
 ---------------------------------------------------------------------------------------------------
-lte_uintX_name : Name
+lte_uintX_name : CairoName
 lte_uintX_name = makeBuiltinName "lte_uint"
 
 lte_uintX_import : Import
@@ -871,7 +872,7 @@ export
 ---------------------------------------------------------------------------------------------------
 -- UINT CAST
 ---------------------------------------------------------------------------------------------------
-cast_uintX_name : Nat -> Name
+cast_uintX_name : Nat -> CairoName
 cast_uintX_name = uintX_name "cast"
 
 cast_uintX_import : Nat -> Import

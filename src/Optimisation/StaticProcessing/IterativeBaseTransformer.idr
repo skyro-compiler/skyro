@@ -1,9 +1,11 @@
 module Optimisation.StaticProcessing.IterativeBaseTransformer
 
 import Data.List
+import Data.Maybe
 import Data.SortedSet
 import Data.SortedMap
-import Core.Context
+-- import Core.Context
+import CairoCode.Name
 import CairoCode.CairoCode
 import CairoCode.CairoCodeUtils
 import Optimisation.StaticProcessing.StaticTransformer
@@ -14,6 +16,7 @@ import Utils.Helpers
 import CommonDef
 import Utils.Lens
 
+import CairoCode.Checker
 import Debug.Trace
 
 %hide Prelude.toList
@@ -21,12 +24,12 @@ import Debug.Trace
 record GlobalTransformerState a where
     constructor MkGlobalTransformerState
     -- Global Context
-    allDefs : SortedMap Name CairoDef
-    retBind : SortedMap Name (List StaticInfo)
+    allDefs : SortedMap CairoName CairoDef
+    retBind : SortedMap CairoName (List StaticInfo)
     userState : a
     -- Per iter Context
     return : Maybe (List StaticInfo)
-    fresh : List Name
+    fresh : List CairoName
     hot : Bool
 
 userStateLens : Lens (GlobalTransformerState a) a
@@ -46,22 +49,22 @@ recordRet ret state = case state.return of
 markHot : GlobalTransformerState a -> GlobalTransformerState a
 markHot = {hot := True}
 
-addFresh : List (Name, CairoDef) -> GlobalTransformerState a -> GlobalTransformerState a
+addFresh : List (CairoName, CairoDef) -> GlobalTransformerState a -> GlobalTransformerState a
 addFresh defs = {fresh $= ((map fst defs)++), allDefs $= mergeWith (\_,_ => assert_total $ idris_crash "Function already exists") (fromList defs)}
 
-pullFresh : GlobalTransformerState a -> (GlobalTransformerState a, List Name)
+pullFresh : GlobalTransformerState a -> (GlobalTransformerState a, List CairoName)
 pullFresh state = ({fresh := Nil} state, state.fresh)
 
-integrateRet : Name -> List StaticInfo -> GlobalTransformerState a -> GlobalTransformerState a
+integrateRet : CairoName -> List StaticInfo -> GlobalTransformerState a -> GlobalTransformerState a
 integrateRet name ret = {retBind $= insert name ret}
 
-integrateDef : (Name, CairoDef) -> GlobalTransformerState a -> GlobalTransformerState a
+integrateDef : (CairoName, CairoDef) -> GlobalTransformerState a -> GlobalTransformerState a
 integrateDef (name, def) = {allDefs $= insert name def}
 
 resetState : GlobalTransformerState a -> GlobalTransformerState a
 resetState = {return := Nothing, hot := False}
 
-finishDef : (Name, CairoDef) -> GlobalTransformerState a -> GlobalTransformerState a
+finishDef : (CairoName, CairoDef) -> GlobalTransformerState a -> GlobalTransformerState a
 finishDef def state = resetState $ integrateDef def (integrateRet (fst def) (fromMaybe (assert_total $ idris_crash "Missing return to record") state.return) state)
 
 -- todo: not necessary but would lead to a cleaner ret map : REENABLE THIS --
@@ -122,7 +125,7 @@ bindArgs _ _ = trace "Def to bind args not available" []
 public export
 record FunData where
     constructor MKFunData
-    function: Name
+    function: CairoName
     target: CairoDef
     -- StaticInfo is input (stores a reg internally) & CairoReg is output
     implicitsIn: SortedMap LinearImplicit StaticInfo
@@ -136,7 +139,7 @@ record FunData where
 public export
 record CloData where
     constructor MKCloData
-    function: Name
+    function: CairoName
     target: CairoDef
     -- StaticInfo is input (stores a reg internally)
     arguments : List StaticInfo
@@ -157,22 +160,22 @@ genMkClo (MKCloData name _ args miss r) = [VisitMkClosure r name  miss (map reso
 -- Todo:
 -- 1. Add a way to generate functions when transforming
 -- 2. Add a way to have extra info per function:
---    Make interface where def & name are generic, then replace (Name,CairoDef) -> Interface a => a
+--    Make interface where def & name are generic, then replace (CairoName,CairoDef) -> Interface a => a
 
 public export
 TransformerResult : Type
-TransformerResult = (Maybe (List (InstVisit CairoReg)), List (Name, CairoDef))
+TransformerResult = (Maybe (List (InstVisit CairoReg)), List (CairoName, CairoDef))
 -- Todo: can we move RegGen into UserState?
 -- Todo: add Fresh defs (can we replace hot and just return self?)
 public export
 interface IterativeTransformerConf a where
-    funTransformer : a -> (depth: Int) -> Name -> FunData -> (a,  TransformerResult)
-    cloTransformer : a -> (depth: Int) -> Name -> CloData -> (a,  TransformerResult)
-    ctxBinder : a -> (Name, CairoDef) -> (List CairoReg, SortedMap LinearImplicit CairoReg) -> (List StaticInfo, SortedMap LinearImplicit StaticInfo)
-    cleanUp : a -> SortedMap Name CairoDef -> (Name, CairoDef) -> (a, (Name, CairoDef))
+    funTransformer : a -> SortedMap CairoName CairoDef -> (depth: Int) -> CairoName -> FunData -> (a,  TransformerResult)
+    cloTransformer : a -> SortedMap CairoName CairoDef -> (depth: Int) -> CairoName -> CloData -> (a,  TransformerResult)
+    ctxBinder : a -> (CairoName, CairoDef) -> (List CairoReg, SortedMap LinearImplicit CairoReg) -> (List StaticInfo, SortedMap LinearImplicit StaticInfo)
+    cleanUp : a -> SortedMap CairoName CairoDef -> (CairoName, CairoDef) -> (a, (CairoName, CairoDef))
     -- defaults --
-    funTransformer uState _ _ funData = (uState, (Nothing, Nil))
-    cloTransformer uState _ _ cloData = (uState, (Nothing, Nil))
+    funTransformer uState _ _ _ funData = (uState, (Nothing, Nil))
+    cloTransformer uState _ _ _ cloData = (uState, (Nothing, Nil))
     ctxBinder _ _ (params, impls) = (map paramInit params, mapValueMap paramInit impls)
         where paramInit : CairoReg -> StaticInfo
               paramInit reg = MKStaticInfo (singleton reg) Unknown
@@ -185,26 +188,28 @@ writeStateBack (state, res) = map (\_ => res) (writeState state)
 overState : (GlobalTransformerState a -> (GlobalTransformerState a, b)) -> Traversal (GlobalTransformerState a) b
 overState fn = readState >>= (\state => writeStateBack $ fn state)
 
-iterativeProcessing : (ita: IterativeTransformerConf a) => List Name -> GlobalTransformerState a -> GlobalTransformerState a
+iterativeProcessing : (ita: IterativeTransformerConf a) => List CairoName -> GlobalTransformerState a -> GlobalTransformerState a
 iterativeProcessing Nil state = state
-iterativeProcessing (name::xs) state = case lookup name state.allDefs of
-        Nothing => iterativeProcessing (trace ("Function "++(show name)++" is missing") xs) state
-        (Just def) => case processFunction (name,def) state of
-            (True, state) => let (nState,fresh) = pullFresh state in iterativeProcessing (fresh ++ (name::xs)) nState
+iterativeProcessing (name::xs) origState = case lookup name origState.allDefs of
+        Nothing => iterativeProcessing (trace ("Function "++(show name)++" is missing") xs) origState
+        (Just def) => case processFunction (name,def) origState of
+            (True, state) => if integrityCheck (toList state.allDefs) name
+                then let (nState,fresh) = pullFresh state in iterativeProcessing (fresh ++ (name::xs)) nState
+                else assert_total $ idris_crash "Before: \{show (name, lookup name origState.allDefs)} \n After: \{show (name, lookup name state.allDefs)} \n All: \{show $ toList origState.allDefs}"
             (False, state) => let (nState,fresh) = pullFresh state in iterativeProcessing (fresh ++ xs) nState
-    where processFunction : (Name, CairoDef) -> GlobalTransformerState a -> (Bool, GlobalTransformerState a)
+    where processFunction : (CairoName, CairoDef) -> GlobalTransformerState a -> (Bool, GlobalTransformerState a)
           -- Abstract and Foreign Functions do not have a body
           processFunction curDef@(curName, (ForeignDef _ _ rets)) state = (False, finishDef curDef (recordRet (replicate rets (defaultInfo "IBT_Foreign_Ret" Unknown)) state))
           processFunction curDef@(curName, (ExtFunDef _ _ _ rets [])) state = (False, finishDef curDef (recordRet (replicate (length rets) (defaultInfo "IBT_Abstract_Ret" Unknown)) state))
           -- todo: Shall we have a track only version now that we have cleanup??
           processFunction curDef state = finish $ globalStaticOptimizeDef @{handler} state.allDefs state curDef
-            where finish : ((Name, CairoDef), GlobalTransformerState a) -> (Bool, GlobalTransformerState a)
+            where finish : ((CairoName, CairoDef), GlobalTransformerState a) -> (Bool, GlobalTransformerState a)
                   finish (def, nState) = let (nuState, nDef) = cleanUp @{ita} nState.userState nState.allDefs def in (nState.hot, finishDef nDef ({userState := nuState} nState))
                   -- Todo: There was a bug once and thus the ret tracking was disabled
                   --       However, I think I fixed it but are not 100% sure (as the failing test changed and more optims arrived)
                   --       If we have manifest problems again try disabling this this
                   --        also try reenable and fixing the cleanup
-                  trackRet : Name -> List StaticInfo -> List CairoReg -> GlobalTransformerState a -> List StaticInfo
+                  trackRet : CairoName -> List StaticInfo -> List CairoReg -> GlobalTransformerState a -> List StaticInfo
                   -- trackRet name args rs state = map (\r => MKStaticInfo (singleton r) Unknown) rs
                   trackRet name args rs state = produceRet $ lookup name state.retBind
                      where produceRet : Maybe (List StaticInfo) -> List StaticInfo
@@ -218,39 +223,40 @@ iterativeProcessing (name::xs) state = case lookup name state.allDefs of
                     track (MKCallData name _ impls args rs) = map (\state => (trackRet name args rs state, staticImplTracker impls)) readState
                     transformClosure (MKCreateCloData name depth args miss r) = overState withState
                         where withState : GlobalTransformerState a -> (GlobalTransformerState a, List (InstVisit CairoReg))
-                              withState state = processRes $ cloTransformer @{ita} state.userState depth (fst curDef) cloData
+                              withState state = let cloData = (MKCloData name def args miss r) in
+                                    processRes cloData (cloTransformer @{ita} state.userState  state.allDefs depth (fst curDef) cloData)
                                 where def : CairoDef
                                       def = fromMaybe (assert_total $ idris_crash "Unknown function is called: \{show name}") (lookup name state.allDefs)
-                                      cloData : CloData
-                                      cloData = (MKCloData name def args miss r)
-                                      processRes :(a, TransformerResult) -> (GlobalTransformerState a, List (InstVisit CairoReg))
-                                      processRes (uState, (Nothing, fresh)) = (addFresh fresh (userStateLens.set state uState), genMkClo cloData)
-                                      processRes (uState, (Just res, fresh)) = (addFresh fresh (markHot (userStateLens.set state uState)), res)
+                                      processRes : CloData -> (a, TransformerResult) -> (GlobalTransformerState a, List (InstVisit CairoReg))
+                                      processRes cloData (uState, (Nothing, fresh)) = (addFresh fresh (userStateLens.set state uState), genMkClo cloData)
+                                      processRes _ (uState, (Just res, fresh)) = (addFresh fresh (markHot (userStateLens.set state uState)), res)
                     transformCall (MKCallData name depth impls args rs) = overState withState
                         where withState : GlobalTransformerState a -> (GlobalTransformerState a, List (InstVisit CairoReg))
-                              withState state = processRes  $ funTransformer @{ita} state.userState depth (fst curDef) funData
-                                where nImpls : SortedMap LinearImplicit StaticInfo
-                                      nImpls = staticImplTracker impls
-                                      rets : List (CairoReg, StaticInfo)
+                              withState state = let funData = (MKFunData name def (mapValueMap fst impls) implOut args rets) in
+                                    processRes funData ( funTransformer @{ita} state.userState state.allDefs depth (fst curDef) funData)
+                                where rets : List (CairoReg, StaticInfo)
                                       rets = zip rs (trackRet name args rs state)
-                                      buildLinOut: LinearImplicit -> (LinearImplicit, (CairoReg, StaticInfo))
-                                      buildLinOut k = (k, (fromMaybe (debugElimination "IBT_buildLinOut") (maybeMap snd (lookup k impls)), fromMaybe (defaultInfo "IBT_buildLinOut2" Unknown) (lookup k nImpls)))
+                                      buildLinOut: SortedMap LinearImplicit StaticInfo -> LinearImplicit -> (LinearImplicit, (CairoReg, StaticInfo))
+                                      buildLinOut nImpls k = (k, (fromMaybe (debugElimination "IBT_buildLinOut") (maybeMap snd (lookup k impls)), fromMaybe (defaultInfo "IBT_buildLinOut2" Unknown) (lookup k nImpls)))
                                       implOut : SortedMap LinearImplicit (CairoReg, StaticInfo)
-                                      implOut = fromList $ map buildLinOut (keys impls)
+                                      implOut = let nImpls = staticImplTracker impls in fromList $ map (buildLinOut nImpls) (keys impls)
                                       def : CairoDef
                                       def = fromMaybe (assert_total $ idris_crash "Unknown function is called: \{show name}") (lookup name state.allDefs)
-                                      funData : FunData
-                                      funData = (MKFunData name def (mapValueMap fst impls) implOut args rets)
-                                      processRes :(a, TransformerResult) -> (GlobalTransformerState a, List (InstVisit CairoReg))
-                                      processRes (uState, (Nothing, fresh)) = (addFresh fresh (userStateLens.set state uState), genFunCall funData)
-                                      processRes (uState, (Just res, fresh)) = (addFresh fresh (markHot (userStateLens.set state uState)), res)
-export
-iterativeCallTransform : IterativeTransformerConf a => a -> List (Name, CairoDef) -> List (Name, CairoDef)
-iterativeCallTransform uState defs = reconstruct $ iterativeProcessing orderedNames (MkGlobalTransformerState defLookup empty uState Nothing Nil False)
-    where defLookup : SortedMap Name CairoDef
-          defLookup = fromList defs
-          orderedNames : List Name
-          orderedNames = map fst (orderUsedDefs defs)
-          reconstruct : GlobalTransformerState a -> List (Name, CairoDef)
-          reconstruct state = orderUsedDefs (toList state.allDefs)
+                                      processRes : FunData -> (a, TransformerResult) -> (GlobalTransformerState a, List (InstVisit CairoReg))
+                                      processRes funData (uState, (Nothing, fresh)) = (addFresh fresh (userStateLens.set state uState), genFunCall funData)
+                                      processRes _ (uState, (Just res, fresh)) = (addFresh fresh (markHot (userStateLens.set state uState)), res)
 
+
+export
+rawIterativeCallTransform : IterativeTransformerConf a => a -> List (CairoName, CairoDef) -> (a, List (CairoName, CairoDef))
+rawIterativeCallTransform uState defs = reconstruct $ iterativeProcessing orderedNames (MkGlobalTransformerState defLookup empty uState Nothing Nil False)
+    where defLookup : SortedMap CairoName CairoDef
+          defLookup = fromList defs
+          orderedNames : List CairoName
+          orderedNames = map fst (orderUsedDefs defs)
+          reconstruct : GlobalTransformerState a -> (a, List (CairoName, CairoDef))
+          reconstruct state = (state.userState, toList state.allDefs)
+
+export
+iterativeCallTransform : IterativeTransformerConf a => a -> List (CairoName, CairoDef) -> List (CairoName, CairoDef)
+iterativeCallTransform uState defs = snd $ rawIterativeCallTransform uState defs

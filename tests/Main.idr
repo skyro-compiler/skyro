@@ -13,7 +13,9 @@ examples =
       "test006", "test007", "test008", "test009", "test010",
       "test011", "test012", "test013", "test014", "test015",
       "test016", "test017", "test018", "test019", "test020",
-      "test021", "test022", "test023", "test024", "test025"]
+      "test021", "test022", "test023", "test024", "test025",
+      "test026", "test027", "test028", "test029", "test030",
+      "test031","test032", "showcase001", "showcase002"]
 
 skyroToCairoTests : TestPool
 skyroToCairoTests =
@@ -25,7 +27,7 @@ skyroToCairoTests =
 primitiveTests : TestPool
 primitiveTests = MkTestPool "'Tests' Primops" 
     [] Default
-    [ "felt", "uint", "int", "big_int"]
+    [ "felt", "uint", "int", "big_int", "bigger_int"]
 
 main : IO ()
 main = runner

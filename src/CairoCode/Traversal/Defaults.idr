@@ -1,11 +1,11 @@
 module CairoCode.Traversal.Defaults
 
-import Core.Context
 import CairoCode.Traversal.Composition
 import CairoCode.CairoCode
 import CairoCode.Traversal.Base
 import Utils.Lens
 import Data.SortedMap
+import Data.Maybe
 
 %hide Prelude.toList
 
@@ -62,7 +62,7 @@ substituteInstVisitValue subst fn = (\inst => (substitute inst) >>= fn)
           substLinImpls linImpls = map fromList (traverse (\(impl,(from,to)) => pure (impl,(!(subst from),to))) (toList linImpls))
           substRetImpls : SortedMap LinearImplicit a -> Traversal s (SortedMap LinearImplicit b)
           substRetImpls linImpls = map fromList (traverse (\(impl,from) => pure (impl,!(subst from))) (toList linImpls))
-          substitute : (InstVisit a -> Traversal s (InstVisit b))
+          substitute : InstVisit a -> Traversal s (InstVisit b)
           substitute (VisitFunction name tags params linImpls rets) = pure $ VisitFunction name tags params linImpls rets
           substitute (VisitForeignFunction name inf args rets) = pure $ VisitForeignFunction name inf args rets
           substitute (VisitAssign res src) = pure $ VisitAssign res !(subst src)

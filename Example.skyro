@@ -1,21 +1,21 @@
-foreign UB_10_printvalue{}(2) -> (1) stable <none> {
+foreign printvalue{}(2) -> (1) stable <none> {
   """
-func printvalue(value, output_ptr) -> (output_ptr):
+func $name$(value, output_ptr) -> (output_ptr):
     assert [output_ptr] = value
     return (output_ptr + 1)
 end"""
 }
 
-fun UB_8_multiply(param 0, param 1) -> (reg   "res") {
+fun multiply(param 0, param 1) -> (reg   "res") {
   (let   0 @0) = @Felt (param 0 * param 1);
   return (let   0 @0)
 }
 
-extfun NS_0__UB_4_main{output_ptr@(reg   "output_ptr")}() -> () {
+extfun main{output_ptr@(reg   "output_ptr")}() -> () {
   (let   0  @0) = 20f;
-  (let   1  @0) = UB_8_multiply(const 25f, let  0 @0);
+  (let   1  @0) = multiply(const 25f, let  0 @0);
   
-  (let   2  @0) = UB_10_printvalue(let   1 @0, reg   "output_ptr");
+  (let   2  @0) = printvalue(let   1 @0, reg   "output_ptr");
   
   return {output_ptr@(let   2 @0)}()
 }

@@ -14,7 +14,8 @@ CONTRACT_FILE = os.path.join(
 async def test_view():
     starknet = await Starknet.empty()
     contract = await starknet.deploy(
-        source=CONTRACT_FILE
+        source=CONTRACT_FILE,
+        cairo_path = ["../../../../skyro-runtime"]
     )
 
 

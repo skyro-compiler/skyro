@@ -1,20 +1,25 @@
 module CairoCode.CairoCodeUtils
 
-import Core.Name.Namespace
-import Compiler.Common
-import Core.Context
+-- import Core.Name.Namespace
+-- import Compiler.Common
+-- import Core.Context
+
+import CairoCode.Name
 import Data.List
+import Data.List1
 import Data.String
 import Data.Vect
 import Data.Either
 import Data.SortedSet
 import Data.SortedMap
-import  Utils.Helpers
+import Utils.Helpers
 
 import CommonDef
 import CairoCode.CairoCode
 import CairoCode.Traversal.Base
 import CairoCode.Traversal.Defaults
+
+import Debug.Trace
 
 %hide Prelude.toList
 
@@ -30,6 +35,7 @@ substituteRegister subst (Eliminated (Replacement c)) = case subst c of
 substituteRegister subst e@(Eliminated _) = e
 substituteRegister subst reg = fromMaybe reg (subst reg)
 
+
 substituteRegisters : Substitutions -> List CairoReg -> List CairoReg
 substituteRegisters subst regs = map (substituteRegister subst) regs
 
@@ -40,7 +46,7 @@ substituteRetLinearImplicits : Substitutions -> SortedMap LinearImplicit CairoRe
 substituteRetLinearImplicits subs linImpls = mapValueMap (substituteRegister subs) linImpls
 
 export
-substituteDefRegisters : Substitutions -> (Name, CairoDef) -> (Name, CairoDef)
+substituteDefRegisters : Substitutions -> (CairoName, CairoDef) -> (CairoName, CairoDef)
 substituteDefRegisters subst def = snd $ runVisitTransformCairoDef (pureTraversal substituteTransform) def
     where substituteTransform : InstVisit CairoReg -> List (InstVisit CairoReg)
           substituteTransform (VisitFunction name tags params linImpls rets) = [VisitFunction name tags (substituteRegisters subst params) (substituteRetLinearImplicits subst linImpls) rets]
@@ -69,6 +75,7 @@ RegisterGen : Type
 RegisterGen = (String, Int)
 
 -- Assumes String is unique between orderUnassignedRegIndexes runs
+-- Either: ensure phase is only run once or ensure orderUnassignedRegIndexes is run befor reused
 export
 mkRegisterGen : String -> RegisterGen
 mkRegisterGen p =  (p, 0)
@@ -123,12 +130,11 @@ prepareRegDefSubst reg@(Unassigned _ _ d) = updateState (\(gen, subst) => update
 prepareRegDefSubst _ = pure ()
 
 export
-orderUnassignedRegIndexes : (Name, CairoDef) -> (Name, CairoDef)
-orderUnassignedRegIndexes def =  substituteDefRegisters (\r => lookup r substitution) def
+orderUnassignedRegIndexes : (CairoName, CairoDef) -> (CairoName, CairoDef)
+orderUnassignedRegIndexes def = let substitution = snd $ runVisitCairoDef (rawTraversal (generalize seqRegNumberCollector) (mkRegisterGen "root", empty)) def in
+        substituteDefRegisters (\r => lookup r substitution) def
     where seqRegNumberCollector : (rets:List CairoReg) -> SortedMap LinearImplicit (CairoReg, CairoReg) -> (params:List CairoReg) -> Traversal SeqRegAlloc ()
           seqRegNumberCollector regs impls _ = foldlM (\_,reg => prepareRegDefSubst reg) () (extractRegs regs impls)
-          substitution: SortedMap CairoReg CairoReg
-          substitution = snd $ runVisitCairoDef (rawTraversal (generalize seqRegNumberCollector) (mkRegisterGen "root",empty)) def
 
 export
 isLocal : CairoReg -> Bool
@@ -146,15 +152,16 @@ isLet : CairoReg -> Bool
 isLet (Let _ _) = True
 isLet _ = False
 
+-- Todo: if this gets to slow use custom SemiGroup for the set
 export
-collectLocals : (Name, CairoDef) -> SortedSet CairoReg
+collectLocals : (CairoName, CairoDef) -> SortedSet CairoReg
 collectLocals def = snd $ runVisitConcatCairoDef (pureTraversal $ generalize general) def
     where general : (rets:List CairoReg) -> LinearImplicitArgs -> (params:List CairoReg) -> SortedSet CairoReg
           general regs impls _ = fromList $ filter isLocal (extractRegs regs impls)
 
 
 export
-countDefInsts : (Name, CairoDef) -> Nat
+countDefInsts : (CairoName, CairoDef) -> Nat
 countDefInsts def = snd $ runVisitConcatCairoDef (pureTraversal $ generalize general) def
     where general : (rets:List CairoReg) -> LinearImplicitArgs -> (params:List CairoReg) -> Nat
           general _ _ _ = 1
@@ -164,6 +171,25 @@ countDefInsts def = snd $ runVisitConcatCairoDef (pureTraversal $ generalize gen
             neutral = Z
 
 export
-countDefsInsts : List (Name, CairoDef) -> Nat
+countDefsInsts : List (CairoName, CairoDef) -> Nat
 countDefsInsts defs = sum $ map countDefInsts defs
 
+export
+replaceCairo : SortedMap String String -> String -> String
+replaceCairo subst source = join $ replaceMarkers $ addMarkers $ forget $ split (=='$') source
+    where mutual
+            addMarkersEven : List String -> List String
+            addMarkersEven (x::xs) = "$\{x}$"::(addMarkers xs)
+            addMarkersEven Nil = Nil
+            addMarkers : List String -> List String
+            addMarkers (x::xs) = x::(addMarkersEven xs)
+            addMarkers Nil = Nil
+            replaceMarker : List String -> (String,String) -> List String
+            replaceMarker (x::xs) r@(id,replacement) = if x == "$\{id}$"
+                then replacement::(replaceMarker xs r)
+                else x::(replaceMarkers xs)
+            replaceMarker Nil _ = Nil
+            replaceMarkers : List String -> List String
+            replaceMarkers xs = foldl replaceMarker xs (toList subst)
+            join : List String -> String
+            join = foldl (++) ""

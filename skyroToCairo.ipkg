@@ -22,6 +22,7 @@ modules =
     CairoCode.CairoCodeLexer,
     CairoCode.CairoCodeParser,
     CairoCode.CairoCodeUtils,
+    CairoCode.Name,
     CairoCode.Traversal.Base,
     CairoCode.Traversal.Composition,
     CairoCode.Traversal.Defaults,

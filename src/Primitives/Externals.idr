@@ -4,19 +4,24 @@ import Primitives.Common
 import Primitives.Felt
 import Primitives.Primitives
 import CairoCode.CairoCode
-import Core.Context
+import CairoCode.Name
 import CairoCode.CairoCodeUtils
 import CodeGen.CodeGenHelper
+import Utils.Helpers
 import Data.SortedMap
 import Data.SortedSet
+import Data.Maybe
 
 interface External where
   apStable : Bool
+  isTransparent : Bool               -- If false Skyro does no deduplication (note: Idris still might - so only compiler generated code is save)
   tupleSig : Maybe TupleStructure
   implicits : List LinearImplicit
   imports : SortedSet Import
   genCode : List CairoReg -> LinearImplicitArgs -> List CairoReg -> String
   eval: (numRes:Nat) -> List ValueInfo -> Maybe (List EvalRes)
+  ------
+  isTransparent = True
 
 %spec f
 associate : (rec:External) => (f:(External -> a)) -> a
@@ -110,6 +115,7 @@ associate fun = fun rec
 [cairo_create_ptr] External where
     apStable = True
     tupleSig = Nothing
+    isTransparent = False -- needs a new alloc() each time deduplication would cause problems
     implicits = []
     imports = singleton (MkImport "starkware.cairo.common.alloc" "alloc" Nothing)
     eval _ _ = Nothing
@@ -142,7 +148,7 @@ associate fun = fun rec
     eval _ _ = Nothing
     genCode [reg] impls args = """
         #MKCON
-        tempvar \{ ptrName } = new ( \{ showSep ", " (map compileReg args) } )
+        tempvar \{ ptrName } = new ( \{ separate ", " (map compileReg args) } )
         \{ compileRegDeclRef reg } = cast(\{ ptrName },felt)
         """
         where ptrName : String
@@ -185,37 +191,57 @@ associate fun = fun rec
               ptrName = compileReg (fst ptr)
     genCode _ _ _ = assert_total $ idris_crash "unsupported signature for bounded_tag"
 
+[bigint_len] External where
+    apStable = False
+    tupleSig = Nothing
+    implicits = []
+    imports = singleton (MkImport "skyro.bigint" "len" (Just "bigint_len"))
+    eval _ _ = Nothing
+    -- we use direct here as otherwise we can get a type error as s_ptr can be of type felt*
+    -- it should be safe as s_ptr should behave quite predictable (otherwise we need to cast here depending on what s_ptr is)
+    genCode [len] impls [big] = """
+        let (\{ regName len }_tmp_) = bigint_len( \{ compileReg big })
+        \{ compileRegDeclDirect len} = \{ compileReg len }_tmp_
+        """
+    genCode _ _ _ = assert_total $ idris_crash "unsupported signature for cairo_create_ptr"
+
+
  -- Dispatch
 %inline
-dispatch : (name:Name) -> ((External => a) -> a)
-dispatch (NS _ (UN $ Basic "cairocaptureptr")) = associate @{cairo_capture_ptr}
-dispatch (NS _ (UN $ Basic "cairowriteptr")) = associate @{cairo_write_ptr}
-dispatch (NS _ (UN $ Basic "cairoreadptr")) = associate @{cairo_read_ptr}
-dispatch (NS _ (UN $ Basic "readtag")) = associate @{read_tag}
-dispatch (NS _ (UN $ Basic "maketagless")) = associate @{make_tagless}
-dispatch (NS _ (UN $ Basic "cairocreateptr")) = associate @{cairo_create_ptr}
-dispatch (NS _ (UN $ Basic "cairopedersenhash")) = associate @{pedersen_hash}
-dispatch (NS _ (UN $ Basic "cairooutput")) = associate @{cairo_output}
-dispatch (NS _ (UN $ Basic "cairomemcopy")) = associate @{cairo_mem_copy}
-dispatch (NS _ (UN $ Basic "boundedtag")) = associate @{bounded_tag}
+dispatch : (name:CairoName) -> ((External => a) -> a)
+dispatch (Extension "external" Nothing (RawName ["ABI", "Helper"] "cairocaptureptr")) = associate @{cairo_capture_ptr}
+dispatch (Extension "external" Nothing (RawName ["ABI", "Helper"] "cairowriteptr")) = associate @{cairo_write_ptr}
+dispatch (Extension "external" Nothing (RawName ["ABI", "Helper"] "cairoreadptr")) = associate @{cairo_read_ptr}
+dispatch (Extension "external" Nothing (RawName ["ABI", "Helper"] "readtag")) = associate @{read_tag}
+dispatch (Extension "external" Nothing (RawName ["ABI", "Helper"] "maketagless")) = associate @{make_tagless}
+dispatch (Extension "external" Nothing (RawName ["ABI", "Helper"] "cairocreateptr")) = associate @{cairo_create_ptr}
+dispatch (Extension "external" Nothing (RawName ["ABI", "Helper"] "cairopedersenhash")) = associate @{pedersen_hash}
+dispatch (Extension "external" Nothing (RawName ["ABI", "Helper"] "cairooutput")) = associate @{cairo_output}
+dispatch (Extension "external" Nothing (RawName ["ABI", "Helper"] "cairomemcopy")) = associate @{cairo_mem_copy}
+dispatch (Extension "external" Nothing (RawName ["ABI", "Helper"] "bigintlength")) = associate @{bigint_len}
+dispatch (Extension "external" Nothing (RawName ["ABI", "Helper"] "boundedtag")) = associate @{bounded_tag}
 
 dispatch n = (\f => assert_total $ idris_crash ("No implementation for external " ++ show n ++ " available"))
 
  -- Accessors
 export
-externalApStable : Name -> Bool
+externalApStable : CairoName -> Bool
 externalApStable name = dispatch name apStable
 
 export
-externalLinearImplicits : Name -> List LinearImplicit
+externalLinearImplicits : CairoName -> List LinearImplicit
 externalLinearImplicits name = dispatch name implicits
 
 export
-externalImports : Name -> SortedSet Import
+externalImports : CairoName -> SortedSet Import
 externalImports name = dispatch name imports
 
 export
-externalCodeGen : Name -> List CairoReg -> LinearImplicitArgs -> List CairoReg -> String
+externalIsTransparent : CairoName -> Bool
+externalIsTransparent name = dispatch name isTransparent
+
+export
+externalCodeGen : CairoName -> List CairoReg -> LinearImplicitArgs -> List CairoReg -> String
 externalCodeGen name res impls args = dispatch name genCode res checkedImpls args
     where expectedImpls : List LinearImplicit
           expectedImpls = externalLinearImplicits name
@@ -225,9 +251,9 @@ externalCodeGen name res impls args = dispatch name genCode res checkedImpls arg
             else assert_total $ idris_crash ("implicits are not correct for " ++ (show name))
 
 export
-externalTupleSig : Name -> Maybe TupleStructure
+externalTupleSig : CairoName -> Maybe TupleStructure
 externalTupleSig name = dispatch name tupleSig
 
 export
-externalEval : Name -> (numRes:Nat) -> List ValueInfo -> Maybe (List EvalRes)
+externalEval : CairoName -> (numRes:Nat) -> List ValueInfo -> Maybe (List EvalRes)
 externalEval name numRets args = dispatch name eval numRets args

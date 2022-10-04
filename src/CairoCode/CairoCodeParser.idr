@@ -2,9 +2,7 @@ module CairoCode.CairoCodeParser
 
 import CairoCode.CairoCodeSerializer
 import CairoCode.CairoCodeLexer
-
-import Core.Context
-
+import CairoCode.Name
 import Data.SortedMap
 import Data.SortedSet
 import Data.String
@@ -27,12 +25,6 @@ keywordP : Keyword -> Rule Keyword
 keywordP kw = terminal ("Expected keyword " ++ show kw) $
   \tok => case tok of
     KeywordTk kw' => if kw == kw' then Just kw else Nothing
-    _ => Nothing
-
-nameP : Rule Name
-nameP = terminal ("Expected Name") $
-  \tok => case tok of
-    Name name => deserializeName name
     _ => Nothing
 
 simpleNameP : Rule String
@@ -123,6 +115,17 @@ parenP = between (tokenP OpenParen) (tokenP CloseParen)
 -- TODO: Cleaner error messages for the combined parsers (e.g. "expected register" when no register-keyword was detected)
 
 -- NOTE: `commit`s as a way to lock in to the current alternative are used liberally, accompanied with a reasoning.
+
+nameP : Rule CairoName
+nameP = choice $ the (List _)
+  [ Extension <$> simpleNameP
+              <*> optional (tokenP Dollar *> intP)
+              <*  tokenP Plus
+              <*> assert_total nameP
+  , do 
+      segments <- sepBy1 (tokenP Period) simpleNameP
+      pure $ uncurry RawName $ unsnoc segments
+  ]
 
 parseConst : Rule CairoConst
 parseConst =
@@ -415,18 +418,19 @@ parseImplicitParam = do
       <*  tokenP AtSymbol
       <*> parenP parseReg
 
--- Todo: Ask Cyrill to correct (Just quickfix)
 parseImport : Rule Import
 parseImport =
-  MkWithoutRename <$  keywordP From <* commit
-                  <*> ((joinBy "." . forget) <$> sepBy1 (tokenP Period) simpleNameP)
-                  <*  keywordP Import
-                  <*> simpleNameP
-  where MkWithoutRename : (ns: String) -> (name: String) -> Import
-        MkWithoutRename ns name = MkImport ns name Nothing
+  MkImport <$  keywordP From <* commit
+           <*> ((joinBy "." . forget) <$> sepBy1 (tokenP Period) simpleNameP)
+           <*  keywordP Import
+           <*> simpleNameP
+           <*> optional (
+             keywordP As
+             *> simpleNameP
+           )
 
 ||| Parser for a CairoDef
-parseCairoDef : Rule (Name, CairoDef)
+parseCairoDef : Rule (CairoName, CairoDef)
 parseCairoDef
   = do -- foreign
     _ <- keywordP Foreign
@@ -469,7 +473,7 @@ parseCairoDef
     commit -- Definitely commit after the extfun keyword
 
     commonFunP (ExtFunDef tags)
-  where commonFunP : (List CairoReg -> SortedMap LinearImplicit CairoReg -> List CairoReg -> List CairoInst -> CairoDef) -> Rule (Name, CairoDef)
+  where commonFunP : (List CairoReg -> SortedMap LinearImplicit CairoReg -> List CairoReg -> List CairoInst -> CairoDef) -> Rule (CairoName, CairoDef)
         commonFunP constructDef = do
           name <- nameP
           implicits <-

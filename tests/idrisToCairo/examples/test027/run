@@ -1,0 +1,3 @@
+../../../starknet-compile.sh Main
+export PYTHONPATH="${PYTHONPATH}:../../../../skyro-runtime"
+pytest -p no:warnings --no-header --no-summary contract_test.py | head -n 4
