@@ -186,21 +186,25 @@ mutual
     liftInstRegLevel limit (NULL r) = NULL (liftRegLevel limit r)
     liftInstRegLevel limit (ERROR r e) = ERROR (liftRegLevel limit r) e
 
+isEmptyBranch : (a, List CairoInst) -> Bool
+isEmptyBranch (_, []) = True
+isEmptyBranch _ = False
+
 caseInlineOptim : Int -> CairoInst -> List CairoInst
 caseInlineOptim _ (CASE reg [] Nothing) = []
-caseInlineOptim d (CASE reg [alt] Nothing) = map (liftInstRegLevel d) (snd alt)
-caseInlineOptim d (CASE reg Nil (Just def)) = map (liftInstRegLevel d) def
-caseInlineOptim _ inst@(CASE reg alts Nothing) = if all (\(i,b) => isNil b) alts then [] else [inst]
-caseInlineOptim _ inst@(CASE reg alts (Just [])) = if all (\(i,b) => isNil b) alts then [] else [inst]
-caseInlineOptim _ (CONSTCASE reg [] Nothing) = []
-caseInlineOptim d (CONSTCASE reg [alt] Nothing) = map (liftInstRegLevel d) (snd alt)
-caseInlineOptim d (CONSTCASE reg Nil (Just def)) = map (liftInstRegLevel d) def
-caseInlineOptim _ inst@(CONSTCASE reg alts Nothing) = if all (\(c,b) => isNil b) alts then [] else [inst]
-caseInlineOptim _ inst@(CONSTCASE reg alts (Just [])) = if all (\(c,b) => isNil b) alts then [] else [inst]
+caseInlineOptim d (CASE reg [(_, insts)] Nothing) = map (liftInstRegLevel d) insts
+caseInlineOptim d (CASE reg [] (Just def)) = map (liftInstRegLevel d) def
+caseInlineOptim _ inst@(CASE reg alts Nothing) = if all isEmptyBranch alts then [] else [inst]
+caseInlineOptim _ inst@(CASE reg alts (Just [])) = if all isEmptyBranch alts then [] else [inst]
+caseInlineOptim _ (CONSTCASE reg [] Nothing) = trace "Z" []
+caseInlineOptim d (CONSTCASE reg [(_, insts)] Nothing) = map (liftInstRegLevel d) insts
+caseInlineOptim d (CONSTCASE reg [] (Just def)) = map (liftInstRegLevel d) def
+caseInlineOptim _ inst@(CONSTCASE reg alts Nothing) = if all isEmptyBranch alts then [] else [inst]
+caseInlineOptim _ inst@(CONSTCASE reg alts (Just [])) = if all isEmptyBranch alts then [] else [inst]
 -- it would be nice if this is possible for CASE with defaults as well - but there is not enough info here
-caseInlineOptim d orig@(CONSTCASE (Const c1) [(c2, insts)] (Just _)) = if c1 == c2
-    then map (liftInstRegLevel d) insts
-    else [orig]
+caseInlineOptim d (CONSTCASE (Const c1) [(c2, insts)] (Just fallback)) = if c1 == c2
+     then map (liftInstRegLevel d) insts
+     else map (liftInstRegLevel d) fallback
 caseInlineOptim _ other = [other]
 
 extractDefaultBranch : List a -> Maybe a
@@ -230,7 +234,7 @@ mutual
               buildRes : (List (Maybe CairoConst, List CairoInst), List (InstVisit CairoReg)) -> (CairoInst, List (InstVisit CairoReg))
               buildRes (branches, rem) = (CONSTCASE reg alts def, rem)
                 where alts : List (CairoConst, List CairoInst)
-                      alts = branches >>=  (\(c,b) => fromMaybe [] (map (\rc => [(rc,b)]) c))
+                      alts = branches >>= (\(c,b) => fromMaybe [] (map (\rc => [(rc,b)]) c))
                       def : Maybe (List CairoInst)
                       def = extractDefaultBranch (map (\(_,b) => b) (filter (\(c,_) => isNothing c ) branches))
 

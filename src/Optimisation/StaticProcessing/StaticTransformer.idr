@@ -179,11 +179,15 @@ branchFilter _ = canEliminate >>= process
 
 branchEliminationDetection : InstVisit StaticInfo -> Traversal LocalStaticOptimState (Maybe (List (InstVisit CairoReg)))
 branchEliminationDetection (VisitConBranch (Just t)) = case !caseBindings of
-    (Just (MKStaticInfo _ (Constructed ctrs))) => if isJust (lookup t ctrs) then keepBranch (VisitConBranch (Just t)) else eliminateBranch
+    (Just (MKStaticInfo _ (Constructed ctrs))) => if isJust (lookup t ctrs)
+        then keepBranch (VisitConBranch (Just t))
+        else eliminateBranch
     _ => keepBranch (VisitConBranch (Just t))
 
 branchEliminationDetection (VisitConstBranch (Just c)) = case !caseBindings of
-    (Just (MKStaticInfo _ (Const vals))) => if contains c vals then keepBranch (VisitConstBranch (Just c)) else eliminateBranch
+    (Just (MKStaticInfo _ (Const vals))) => if contains c vals
+        then keepBranch (VisitConstBranch (Just c))
+        else eliminateBranch
     _ => keepBranch (VisitConstBranch (Just c))
 branchEliminationDetection (VisitConBranch Nothing) = keepBranch (VisitConBranch Nothing)
 branchEliminationDetection (VisitConstBranch Nothing) = keepBranch (VisitConstBranch Nothing)
@@ -282,9 +286,9 @@ constantFoldTransform implicitLookup inst = transformer inst
           transformer (VisitMkConstant reg c) = pure $ [VisitMkConstant reg c]
           transformer VisitEndFunction = pure $ [VisitEndFunction]
           -- Covered by Branch Eliminator --
-          transformer (VisitConBranch t) = assert_total $ idris_crash "constantFoldTransform must be coupled with a branch hanlder"
-          transformer (VisitConstBranch c) = assert_total $ idris_crash "constantFoldTransform must be coupled with a branch hanlder"
-          transformer VisitBranchEnd = assert_total $ idris_crash "constantFoldTransform must be coupled with a branch hanlder"
+          transformer (VisitConBranch t) = assert_total $ idris_crash "constantFoldTransform must be coupled with a branch handler"
+          transformer (VisitConstBranch c) = assert_total $ idris_crash "constantFoldTransform must be coupled with a branch handler"
+          transformer VisitBranchEnd = assert_total $ idris_crash "constantFoldTransform must be coupled with a branch handler"
 
 -- This is here to make sure  implicitLookup is computed once and not every time constantFoldTransform is executed
 mkConstantFoldTransform : SortedMap CairoName CairoDef -> (InstVisit StaticInfo -> Traversal LocalStaticOptimState (List (InstVisit CairoReg)))

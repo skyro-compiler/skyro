@@ -15,7 +15,7 @@ examples =
       "test016", "test017", "test018", "test019", "test020",
       "test021", "test022", "test023", "test024", "test025",
       "test026", "test027", "test028", "test029", "test030",
-      "test031","test032", "showcase001", "showcase002"]
+      "test031", "test032", "test033", "showcase001", "showcase002"]
 
 skyroToCairoTests : TestPool
 skyroToCairoTests =

@@ -94,8 +94,7 @@ fromEvalRes _ _ = assert_total $ idris_crash "can not process eval res"
 
 mutual
     mergeStaticValue : Maybe CairoReg -> StaticValue -> StaticValue -> StaticValue
-    mergeStaticValue _ (Error _) other = other -- The error would crash program so if we arrive here it is the other
-    mergeStaticValue _ other (Error _) = other -- The error would crash program so if we arrive here it is the other
+    mergeStaticValue _ (Error a) (Error b) = Error ("\{a}, \{b}")
     mergeStaticValue _ (Const vs1) (Const vs2) = Const (union vs1 vs2)
     mergeStaticValue fallback (Constructed c1) (Constructed c2) = Constructed (mergeWith mergeFields c1 c2)
         where mergeFields: List StaticInfo -> List StaticInfo -> List StaticInfo
